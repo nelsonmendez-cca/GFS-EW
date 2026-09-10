@@ -35,7 +35,8 @@ import streamlit as st
 st.set_page_config(
     page_title="Visor Meteorológico - El Salvador",
     page_icon="🗺️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 DIRECTORIO_ACTUAL = os.path.dirname(os.path.abspath(__file__))
@@ -256,7 +257,7 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
     return out_image[0], extent, out_meta
 
 def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, hillshade: np.ndarray, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
+    fig, ax = plt.subplots(figsize=(10, 5.5), dpi=200)
     ax.set_facecolor('white')
     
     estilo = ESTILOS_MAPA.get(var, {})
@@ -276,7 +277,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
     cbar.ax.tick_params(labelsize=9)
-    plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=12, fontweight='bold', pad=10)
+    plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=11, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
     plt.grid(True, linestyle=':', alpha=0.3)
@@ -285,7 +286,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
 
 def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gdf_boundary: gpd.GeoDataFrame, hillshade: np.ndarray, var: str) -> plt.Figure:
     fechas = sorted(list(raster_dict.keys()))[:16]
-    fig, axes = plt.subplots(4, 4, figsize=(16, 12), dpi=150)
+    fig, axes = plt.subplots(4, 4, figsize=(16, 11), dpi=150)
     axes = axes.flatten()
 
     estilo = ESTILOS_MAPA.get(var, {})
@@ -321,7 +322,7 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
 
-    fig.suptitle(f"Evolución Diaria (16 Días) - El Salvador: {estilo['title']}", fontsize=14, fontweight='bold', y=0.98)
+    fig.suptitle(f"Evolución Diaria (16 Días) - El Salvador: {estilo['title']}", fontsize=13, fontweight='bold', y=0.98)
     return fig
 
 def crear_zip_tiffs(var_seleccionada: str) -> bytes:
@@ -345,10 +346,10 @@ def ejecutar_procesamiento():
     items_estaciones = list(estaciones.items())
     dfs_modelos = []
 
-    progreso = st.progress(0, text="Descargando malla de datos...")
+    progreso = st.sidebar.progress(0, text="Descargando malla de datos...")
 
     for idx_mod, (model_key, alias) in enumerate(MODELOS.items()):
-        progreso.progress(10 + idx_mod * 20, text=f"Descargando modelo {alias}...")
+        progreso.progress(10 + idx_mod * 20, text=f"Descargando {alias}...")
         for i in range(0, len(items_estaciones), BATCH_SIZE):
             chunk = items_estaciones[i:i + BATCH_SIZE]
             lats = [float(meta["lat"]) for _, meta in chunk]
@@ -362,12 +363,9 @@ def ejecutar_procesamiento():
                 st.error(f"Error descargando {alias}: {e}")
 
     df_raw_all = pd.concat(dfs_modelos, ignore_index=True)
-    
-    # Filtrar únicamente puntos geográficos reales excluyendo buffer
     df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")]
     st.session_state['df_raw_all'] = df_puntos_reales
 
-    # Ensamble promedio
     df_ensamble = df_raw_all.groupby(["ID", "NAME", "lat", "lon", "date"])[DAILY_VARS].mean().reset_index()
 
     geometrias = [geom for geom in gdf_boundary.geometry]
@@ -435,23 +433,21 @@ def ejecutar_procesamiento():
             "gdf": gdf_boundary
         }
 
-    progreso.progress(100, text="¡Proceso completado!")
-    st.success("🎉 Datos procesados. Ya puedes ver los mapas, gráficos promedio y descargar los reportes.")
+    progreso.progress(100, text="¡Completado!")
+    st.sidebar.success("🎉 Datos cargados exitosamente.")
 
 def render_graficos_promedio():
-    st.header("📊 Promedio Nacional Diario (Puntos de Control)")
+    st.subheader("📊 Promedio Nacional Diario (25 Estaciones)")
     
     if 'df_raw_all' not in st.session_state:
-        st.warning("⚠️ Por favor haga clic en '🔄 Actualizar Datos / Procesar' en la barra lateral para generar la información.")
+        st.info("👈 Haga clic en **'🔄 Cargar / Actualizar Datos'** en el panel izquierdo para generar los gráficos.")
         return
 
     df_raw = st.session_state['df_raw_all'].copy()
 
-    # Calcular promedios a nivel nacional por modelo y fecha
     df_prom_diario = df_raw.groupby(["modelo", "date"])[DAILY_VARS].mean().reset_index()
     df_prom_diario["temperature_2m_mean"] = (df_prom_diario["temperature_2m_max"] + df_prom_diario["temperature_2m_min"]) / 2.0
 
-    # DataFrames Pivotados
     piv_rain = df_prom_diario.pivot(index="date", columns="modelo", values="precipitation_sum").reset_index()
     piv_tmax = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_max").reset_index()
     piv_tmin = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_min").reset_index()
@@ -462,104 +458,138 @@ def render_graficos_promedio():
     piv_tmin["Ensamble"] = (piv_tmin["GFS"] + piv_tmin["ECMWF"]) / 2.0
     piv_tmean["Ensamble"] = (piv_tmean["GFS"] + piv_tmean["ECMWF"]) / 2.0
 
-    # 1. Gráfico de Precipitación Promedio
-    st.subheader("🌧️ Precipitación Promedio Diaria (mm)")
+    # 1. Precipitación Promedio
+    st.markdown("#### 🌧️ Precipitación Promedio Diaria (mm)")
     fig_rain = go.Figure()
     fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["ECMWF"], name="ECMWF (Europeo)", marker_color="#1f77b4"))
     fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["GFS"], name="GFS (EE.UU.)", marker_color="#ff7f0e"))
     fig_rain.add_trace(go.Scatter(x=piv_rain["date"], y=piv_rain["Ensamble"], name="Ensamble Consolidado", mode="lines+markers", line=dict(color="#2ca02c", width=3, dash="dot")))
-    fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación Promedio (mm)", hovermode="x unified")
+    fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Gráfico del Modelo Europeo
-    st.subheader("🇪🇺 Perfil Térmico - Modelo Europeo (ECMWF)")
-    fig_eur = go.Figure()
-    fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima Promedio", mode="lines+markers", line=dict(color="#d62728", width=2)))
-    fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media Promedio", mode="lines+markers", line=dict(color="#2ca02c", width=2, dash="dash")))
-    fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima Promedio", mode="lines+markers", line=dict(color="#17becf", width=2)))
-    fig_eur.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified")
-    st.plotly_chart(fig_eur, use_container_width=True)
+    # 2. Perfil Térmico ECMWF & GFS en columnas
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.markdown("#### Modelo Europeo (ECMWF)")
+        fig_eur = go.Figure()
+        fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#d62728", width=2)))
+        fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#2ca02c", width=2, dash="dash")))
+        fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#17becf", width=2)))
+        fig_eur.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
+        st.plotly_chart(fig_eur, use_container_width=True)
 
-    # 3. Gráfico del Modelo GFS
-    st.subheader("🇺🇸 Perfil Térmico - Modelo GFS")
-    fig_gfs = go.Figure()
-    fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima Promedio", mode="lines+markers", line=dict(color="#e377c2", width=2)))
-    fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media Promedio", mode="lines+markers", line=dict(color="#bcbd22", width=2, dash="dash")))
-    fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima Promedio", mode="lines+markers", line=dict(color="#8c564b", width=2)))
-    fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified")
-    st.plotly_chart(fig_gfs, use_container_width=True)
+    with col_g2:
+        st.markdown("#### Modelo GFS")
+        fig_gfs = go.Figure()
+        fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#e377c2", width=2)))
+        fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#bcbd22", width=2, dash="dash")))
+        fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#8c564b", width=2)))
+        fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
+        st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # 4. Gráfico del Modelo Consolidado / Ensamble
-    st.subheader("🌐 Perfil Térmico - Modelo Consolidado (Ensamble)")
+    # 3. Ensamble Consolidado
+    st.markdown("#### 🌐 Modelo Consolidado ")
     fig_ens = go.Figure()
     fig_ens.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["Ensamble"], name="T. Máxima Ensamble", mode="lines+markers", line=dict(color="#d62728", width=3)))
     fig_ens.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["Ensamble"], name="T. Media Ensamble", mode="lines+markers", line=dict(color="#7f7f7f", width=3, dash="dash")))
     fig_ens.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["Ensamble"], name="T. Mínima Ensamble", mode="lines+markers", line=dict(color="#1f77b4", width=3)))
-    fig_ens.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified")
+    fig_ens.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_ens, use_container_width=True)
 
-    # 5. Tablas y Exportación a Excel
-    st.subheader("📋 Tablas de Datos y Exportación Excel")
+    # Tablas de Resumen
+    with st.expander("📋 Ver Tablas de Datos Promedio"):
+        df_rain_export = piv_rain.rename(columns={"ECMWF": "Lluvia ECMWF (mm)", "GFS": "Lluvia GFS (mm)", "Ensamble": "Lluvia Ensamble (mm)"})
+        df_temp_export = pd.DataFrame({
+            "Fecha": piv_tmax["date"],
+            "TMax ECMWF (°C)": piv_tmax["ECMWF"],
+            "TMin ECMWF (°C)": piv_tmin["ECMWF"],
+            "TMedia ECMWF (°C)": piv_tmean["ECMWF"],
+            "TMax GFS (°C)": piv_tmax["GFS"],
+            "TMin GFS (°C)": piv_tmin["GFS"],
+            "TMedia GFS (°C)": piv_tmean["GFS"],
+            "TMax Ensamble (°C)": piv_tmax["Ensamble"],
+            "TMin Ensamble (°C)": piv_tmin["Ensamble"],
+            "TMedia Ensamble (°C)": piv_tmean["Ensamble"]
+        })
 
-    df_rain_export = piv_rain.rename(columns={"ECMWF": "Lluvia ECMWF (mm)", "GFS": "Lluvia GFS (mm)", "Ensamble": "Lluvia Ensamble (mm)"})
-    
-    df_temp_export = pd.DataFrame({
-        "Fecha": piv_tmax["date"],
-        "TMax ECMWF (°C)": piv_tmax["ECMWF"],
-        "TMin ECMWF (°C)": piv_tmin["ECMWF"],
-        "TMedia ECMWF (°C)": piv_tmean["ECMWF"],
-        "TMax GFS (°C)": piv_tmax["GFS"],
-        "TMin GFS (°C)": piv_tmin["GFS"],
-        "TMedia GFS (°C)": piv_tmean["GFS"],
-        "TMax Ensamble (°C)": piv_tmax["Ensamble"],
-        "TMin Ensamble (°C)": piv_tmin["Ensamble"],
-        "TMedia Ensamble (°C)": piv_tmean["Ensamble"]
-    })
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.markdown("**Precipitación Promedio Nacional**")
+            st.dataframe(df_rain_export, use_container_width=True, height=250)
+        with col_t2:
+            st.markdown("**Temperaturas Promedio Nacional**")
+            st.dataframe(df_temp_export, use_container_width=True, height=250)
 
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        st.write("**Precipitación Promedio Nacional**")
-        st.dataframe(df_rain_export, use_container_width=True)
-    with col_t2:
-        st.write("**Temperaturas Promedio Nacional**")
-        st.dataframe(df_temp_export, use_container_width=True)
-
+    # Descarga Excel en la barra lateral
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df_rain_export.to_excel(writer, sheet_name='Precipitacion_Promedio', index=False)
         df_temp_export.to_excel(writer, sheet_name='Temperaturas_Promedio', index=False)
 
-    st.download_button(
-        label="📥 Descargar Promedios Nacionales (.xlsx)",
-        data=buffer.getvalue(),
-        file_name=f"Promedios_Meteorologicos_SV_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.session_state['excel_buffer'] = buffer.getvalue()
 
 # =====================
-# INTERFAZ STREAMLIT
+#  BARRA LATERAL (SIDEBAR)
 # =====================
-st.title("🗺️ Visor de Pronóstico Meteorológico - El Salvador")
+st.sidebar.title("⚙️ Panel de Control")
 
-st.sidebar.header("⚙️ Control")
-if st.sidebar.button("🔄 Actualizar Datos / Procesar", type="primary"):
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Cargar / Actualizar Datos", type="primary", use_container_width=True):
     ejecutar_procesamiento()
 
-tab1, tab2, tab3 = st.tabs(["📅 Resumen Semanal", "🗓️ Collage 16 Días", "📊 Gráficos Promedio Nacional"])
-
+# Selector de Variable
+var_seleccionada = None
 if 'datos_procesados' in st.session_state:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎯 Capa Visualizada")
     var_seleccionada = st.sidebar.selectbox(
-        "📊 Selecciona Variable para Mapas:",
+        "Variable Meteorológica:",
         options=VARIABLES_EXPORTAR,
         format_func=lambda x: ESTILOS_MAPA[x]["title"]
     )
 
+    # Sección de Exportación GIS (ZIP GeoTIFFs)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("💾 Exportar GIS")
+    bytes_zip = crear_zip_tiffs(var_seleccionada)
+    st.sidebar.download_button(
+        label=f"⬇️ GeoTIFFs (.ZIP)\n{ESTILOS_MAPA[var_seleccionada]['title']}",
+        data=bytes_zip,
+        file_name=f"capas_raster_{var_seleccionada}.zip",
+        mime="application/zip",
+        use_container_width=True
+    )
+
+# Descarga de Excel si los gráficos fueron generados
+if 'excel_buffer' in st.session_state:
+    st.sidebar.download_button(
+        label="📥 Reporte Promedios (.XLSX)",
+        data=st.session_state['excel_buffer'],
+        file_name=f"Promedios_Meteorologicos_SV_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+st.sidebar.markdown("---")
+st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (GFS & ECMWF)")
+
+# =====================
+#  ÁREA PRINCIPAL
+# =====================
+st.title("🗺️ Visor de Pronóstico Meteorológico - El Salvador")
+
+tab1, tab2, tab3 = st.tabs(["📅 Resumen Semanal", "🗓️ Collage 16 Días", "📊 Gráficos Promedio Nacional"])
+
+if 'datos_procesados' in st.session_state and var_seleccionada:
     datos_var = st.session_state['datos_procesados'][var_seleccionada]
 
     with tab1:
-        semana = st.radio("Selecciona Período Semanal (7 Días):", ["Semana 1", "Semana 2"], horizontal=True)
-        key_sem = "SEMANA_1" if semana == "Semana 1" else "SEMANA_2"
-        grupo_fechas = datos_var["fechas_s1"] if semana == "Semana 1" else datos_var["fechas_s2"]
+        col_rad, col_space = st.columns([1, 2])
+        with col_rad:
+            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
+        
+        key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
+        grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
 
         if grupo_fechas and key_sem in datos_var.get("raster_semanal", {}):
             raster_resumen = datos_var["raster_semanal"][key_sem]
@@ -568,28 +598,22 @@ if 'datos_procesados' in st.session_state:
 
             fig = generar_figura_semanal(
                 raster_resumen, datos_var["extent"], datos_var["gdf"], datos_var["hillshade"],
-                var_seleccionada, f"{semana} (7 Días)", f_init_str, f_end_str
+                var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
             )
-            st.pyplot(fig)
+            st.pyplot(fig, use_container_width=True)
 
     with tab2:
-        st.subheader("Pronóstico de los próximos 16 días")
+        st.subheader("Pronóstico Diario Continuo (16 Días)")
         fig_collage = generar_collage_16_dias(
             datos_var["raster_dict"], datos_var["extent"], datos_var["gdf"], datos_var["hillshade"], var_seleccionada
         )
-        st.pyplot(fig_collage)
+        st.pyplot(fig_collage, use_container_width=True)
 
-    # BOTÓN DE DESCARGA DE RASTERS (ZIP)
-    st.markdown("---")
-    st.subheader("💾 Exportación de Datos GIS")
-    bytes_zip = crear_zip_tiffs(var_seleccionada)
-    st.download_button(
-        label=f"⬇️ Descargar Paquete GeoTIFFs (.ZIP) - {ESTILOS_MAPA[var_seleccionada]['title']}",
-        data=bytes_zip,
-        file_name=f"capas_raster_{var_seleccionada}.zip",
-        mime="application/zip",
-        type="secondary"
-    )
+else:
+    with tab1:
+        st.info("👈 Presione **'🔄 Cargar / Actualizar Datos'** en el panel lateral para iniciar la descarga y visualización de mapas.")
+    with tab2:
+        st.info("👈 Presione **'🔄 Cargar / Actualizar Datos'** en el panel lateral para generar el collage de 16 días.")
 
 with tab3:
     render_graficos_promedio()
