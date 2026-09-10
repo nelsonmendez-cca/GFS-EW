@@ -2,10 +2,9 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Buffer de Bounding Box para eliminar artefactos de borde en interpolación C1.
-• Promedio de modelos a nivel tabular + Ensamble espacial.
-• Resumen Semanal de 7 días exactos.
-• Renderizado de mapas con relieve topográfico (Hillshade).
+• Buffer de Bounding Box para eliminar artefactos en bordes.
+• Carga e integración de ELEVACIÓN Y RELIEVE REAL (SRTM/DEM) limitado estricto al país.
+• Renderizado con sombreado de relieve real bajo la capa meteorológica.
 """
 
 import json, os, sys, time, io, zipfile
@@ -31,7 +30,7 @@ import streamlit as st
 #  CONFIGURACIÓN BASE
 # =====================
 st.set_page_config(
-    page_title="Visor Meteorológico Avanzado - El Salvador",
+    page_title="Visor de Pronostico Meteorológico - El Salvador",
     page_icon="🗺️",
     layout="wide"
 )
@@ -51,7 +50,7 @@ END_DATE = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
 TIMEOUT_S = 60
 BATCH_SIZE = 50
 RESOLUCION_TIFF = 0.008
-BUFFER_GRADOS = 0.35  # Amortiguación externa (~35-40km) para evitar artefactos en bordes
+BUFFER_GRADOS = 0.35 
 
 # --- PALETA DE COLOR RGB PARA PRECIPITACIÓN ---
 colores_rgb = np.array([
@@ -129,7 +128,6 @@ def extraer_centroide(coords: Any) -> tuple:
 
 @st.cache_data
 def cargar_estaciones_ampliadas(ruta: str, buffer_deg: float) -> tuple:
-    """ Carga estaciones del GeoJSON y genera una rejilla de amortiguación perimetral (Buffer). """
     if not os.path.exists(ruta):
         st.error(f"❌ No se encontró el archivo GeoJSON: {ruta}")
         return {}, None
@@ -160,7 +158,7 @@ def cargar_estaciones_ampliadas(ruta: str, buffer_deg: float) -> tuple:
 
             estaciones[est_id] = {"name": nombre, "lat": float(lat), "lon": float(lon)}
 
-    # Crear rejilla de puntos externos (Buffer) alrededor de los bounds nacionales
+    # Puntos de amortiguación alrededor de las fronteras
     min_lon, min_lat, max_lon, max_lat = gdf.total_bounds
     lons_ext = np.linspace(min_lon - buffer_deg, max_lon + buffer_deg, 6)
     lats_ext = np.linspace(min_lat - buffer_deg, max_lat + buffer_deg, 6)
@@ -168,7 +166,6 @@ def cargar_estaciones_ampliadas(ruta: str, buffer_deg: float) -> tuple:
     idx_b = 1
     for lon_b in lons_ext:
         for lat_b in lats_ext:
-            # Solo agregar si está fuera del rectángulo central estricto
             if not (min_lon <= lon_b <= max_lon and min_lat <= lat_b <= max_lat):
                 estaciones[f"BUFFER_{idx_b}"] = {"name": f"Punto Borde {idx_b}", "lat": float(lat_b), "lon": float(lon_b)}
                 idx_b += 1
@@ -209,25 +206,47 @@ def parse_batch_response(results: List[Dict[str, Any]], batch_meta: List[Dict[st
         dfs.append(df)
     return dfs
 
-def generar_hillshade_sintetico(grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray) -> np.ndarray:
-    """ Simula un mapa de sombra de relieve mediante variaciones de elevación analíticas (Montañas de El Salvador). """
-    x, y = grid_lon_mesh, grid_lat_mesh
-    # Genera elevaciones sintéticas basadas en coordenadas reales (Cadena volcánica y sierra septentrional)
-    z = (np.sin((x + 89.2) * 45) * np.cos((y - 13.8) * 45)) * 400 + np.sin((x + 88.5) * 30) * 300
-    z = np.clip(z, 0, None)
-    
-    # Calcular gradiente/pendiente para sombreado topográfico
-    dy, dx = np.gradient(z)
-    slope = np.pi/2.0 - np.arctan(np.sqrt(dx*dx + dy*dy))
-    aspect = np.arctan2(-dy, dx)
-    altitude = np.pi / 4.0  # Ángulo de sol a 45 grados
-    azimuth = 3.0 * np.pi / 4.0  # Iluminación Noroeste
+def obtener_hillshade_real_recortado(grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> np.ndarray:
+    """ Consulta elevación topographic real desde Open-Elevation y calcula la sombra de relieve dentro del país. """
+    try:
+        # Extraer muestra para generar el mapa de elevación
+        lons = grid_lon_mesh.flatten()[::15]
+        lats = grid_lat_mesh.flatten()[::15]
+        
+        url = "https://api.open-elevation.com/api/v1/lookup"
+        locations = [{"latitude": round(lat, 4), "longitude": round(lon, 4)} for lat, lon in zip(lats, lons)]
+        
+        # Consulta en bloques
+        elevations = []
+        for i in range(0, len(locations), 100):
+            res = requests.post(url, json={"locations": locations[i:i+100]}, timeout=15)
+            if res.status_code == 200:
+                elevations.extend([r["elevation"] for r in res.json()["results"]])
+            else:
+                break
 
-    shaded = np.sin(altitude) * np.sin(slope) + np.cos(altitude) * np.cos(slope) * np.cos(azimuth - aspect)
-    return (shaded - shaded.min()) / (shaded.max() - shaded.min())
+        if len(elevations) == len(lons):
+            points = np.column_stack((lons, lats))
+            z_grid = griddata(points, elevations, (grid_lon_mesh, grid_lat_mesh), method='cubic')
+            z_grid = gaussian_filter(np.nan_to_num(z_grid, nan=0.0), sigma=1.5)
+            
+            # Sombreado topográfico
+            dy, dx = np.gradient(z_grid)
+            slope = np.pi/2.0 - np.arctan(np.sqrt(dx*dx + dy*dy))
+            aspect = np.arctan2(-dy, dx)
+            shaded = np.sin(np.pi/4.0) * np.sin(slope) + np.cos(np.pi/4.0) * np.cos(slope) * np.cos(3.0*np.pi/4.0 - aspect)
+            shaded_norm = (shaded - shaded.min()) / (shaded.max() - shaded.min() + 1e-5)
+            
+            # Recortar estrictamente al país
+            geometrias = [geom for geom in gdf_boundary.geometry]
+            hill_recortado, _, _ = recortar_y_guardar_raster(shaded_norm, "hillshade_temp", transform, height, width, geometrias)
+            return hill_recortado
+    except Exception:
+        pass
+    
+    return None
 
 def interpolar_suave(points: np.ndarray, values: np.ndarray, grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, es_precip: bool = False) -> np.ndarray:
-    """ Interpola suavemente con Clough-Tocher + Suavizado Gaussiano. """
     try:
         interp_ct = CloughTocher2DInterpolator(points, values)
         grid_z = interp_ct(grid_lon_mesh, grid_lat_mesh)
@@ -280,19 +299,23 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
 
 def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, hillshade: np.ndarray, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
+    
+    # Fondo neutro blanco para zonas fuera del mapa
+    ax.set_facecolor('white')
+    
     estilo = ESTILOS_MAPA.get(var, {})
     cmap = estilo["cmap"]
     norm = estilo.get("norm_semanal")
 
-    # Renderizar Relieve Topográfico en Blanco y Negro de fondo
-    if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', alpha=0.35, origin='upper')
-
     # Renderizar Capa Climatológica
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, alpha=0.82, origin='upper')
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
+
+    # Renderizar Sombreado de Relieve REAL solo dentro del país
+    if hillshade is not None:
+        ax.imshow(hillshade, extent=extent, cmap='gray', alpha=0.25, origin='upper', zorder=3)
     
-    # Límites departamentales / nacionales
-    gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#222222', linewidth=0.9, linestyle='-')
+    # Delimitación departamental / nacional limpia
+    gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, linestyle='-', zorder=4)
 
     label_cbar = estilo.get("label_semanal", var)
     if estilo.get("ticks_semanal"):
@@ -304,7 +327,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     plt.title(f"El Salvador: {estilo['title']} (Ensamble GFS/ECMWF)\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=12, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
-    plt.grid(True, linestyle=':', alpha=0.4)
+    plt.grid(True, linestyle=':', alpha=0.3)
     plt.tight_layout()
     return fig
 
@@ -322,7 +345,7 @@ def ejecutar_procesamiento():
     items_estaciones = list(estaciones.items())
     dfs_modelos = []
 
-    progreso = st.progress(0, text="Descargando malla ampliada de datos (incluye buffer de borde)...")
+    progreso = st.progress(0, text="Descargando malla de datos...")
 
     # 1. DESCARGA DE DATOS TABULARES
     for idx_mod, (model_key, alias) in enumerate(MODELOS.items()):
@@ -346,7 +369,6 @@ def ejecutar_procesamiento():
     geometrias = [geom for geom in gdf_boundary.geometry]
     min_lon, min_lat, max_lon, max_lat = gdf_boundary.total_bounds
     
-    # Malla de interpolación ligeramente más grande que el país para garantizar suavizado
     grid_lon = np.arange(min_lon - 0.1, max_lon + 0.1, RESOLUCION_TIFF)
     grid_lat = np.arange(min_lat - 0.1, max_lat + 0.1, RESOLUCION_TIFF)
     grid_lon_mesh, grid_lat_mesh = np.meshgrid(grid_lon, grid_lat)
@@ -365,19 +387,18 @@ def ejecutar_procesamiento():
     fechas_s1 = [f for f in fechas_disponibles if d_manana <= f <= d_s1_end]
     fechas_s2 = [f for f in fechas_disponibles if d_s2_start <= f <= d_s2_end]
 
-    # Generar Relieve Sintético
-    hillshade_bg = generar_hillshade_sintetico(grid_lon_mesh, grid_lat_mesh)
+    # Obtenemos relieve REAL con mascara nacional
+    hillshade_real = obtener_hillshade_real_recortado(grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
 
     st.session_state['datos_procesados'] = {}
 
-    # 3. INTERPOLACIÓN Y MÁSCARA DE BORDES
+    # 3. INTERPOLACIÓN Y MÁSCARA
     for idx_var, var in enumerate(VARIABLES_EXPORTAR):
-        progreso.progress(50 + idx_var * 15, text=f"Interpolando con buffer y generando rasters de: {var}")
+        progreso.progress(50 + idx_var * 15, text=f"Generando rasters recortados de: {var}")
         
         raster_diario_dict = {}
         extent_final = None
 
-        # A) DÍAS INDIVIDUALES
         for fecha in fechas_disponibles:
             df_fecha = df_ensamble[df_ensamble['date'] == fecha]
             points = df_fecha[['lon', 'lat']].values
@@ -391,7 +412,6 @@ def ejecutar_procesamiento():
             )
             raster_diario_dict[fecha] = raster_dia
 
-        # B) RESUMEN SEMANAL DE 7 DÍAS
         raster_semanal_dict = {}
         for nom_sem, grp_fechas in [("SEMANA_1", fechas_s1), ("SEMANA_2", fechas_s2)]:
             if grp_fechas:
@@ -418,18 +438,18 @@ def ejecutar_procesamiento():
             "extent": extent_final,
             "fechas_s1": fechas_s1,
             "fechas_s2": fechas_s2,
-            "hillshade": hillshade_bg,
+            "hillshade": hillshade_real,
             "gdf": gdf_boundary
         }
 
     progreso.progress(100, text="¡Proceso completado!")
-    st.success("🎉 Datos procesados sin artefactos de borde y con relieve integrado.")
+    st.success("🎉 Datos procesados.")
 
 # =====================
 # INTERFAZ STREAMLIT
 # =====================
-st.title("🗺️ Visor Meteorológico con Relieve Topográfico")
-st.markdown("Sistema de pronósticos meteorológicos **GFS + ECMWF** con interpolación amortiguada de bordes.")
+st.title("🗺️ Visor de Pronostico Meteorológico")
+st.markdown("Sistema de pronósticos meteorológicos.")
 
 st.sidebar.header("⚙️ Opciones")
 if st.sidebar.button("🔄 Actualizar Datos / Procesar", type="primary"):
