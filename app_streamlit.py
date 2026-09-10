@@ -31,7 +31,7 @@ import streamlit as st
 #  CONFIGURACIÓN BASE
 # =====================
 st.set_page_config(
-    page_title="Visor Meteorológico Avanzado - El Salvador",
+    page_title="Visor Meteorológico - El Salvador",
     page_icon="🗺️",
     layout="wide"
 )
@@ -274,7 +274,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
     cbar.ax.tick_params(labelsize=9)
-    plt.title(f"El Salvador: {estilo['title']} (Ensamble GFS/ECMWF)\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=12, fontweight='bold', pad=10)
+    plt.title(f" {estilo['title']} \n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=12, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
     plt.grid(True, linestyle=':', alpha=0.3)
@@ -346,7 +346,7 @@ def ejecutar_procesamiento():
     items_estaciones = list(estaciones.items())
     dfs_modelos = []
 
-    progreso = st.progress(0, text="Descargando malla ampliada de datos...")
+    progreso = st.progress(0, text="Descargando malla de datos...")
 
     for idx_mod, (model_key, alias) in enumerate(MODELOS.items()):
         progreso.progress(10 + idx_mod * 20, text=f"Descargando modelo {alias}...")
@@ -436,7 +436,7 @@ def ejecutar_procesamiento():
 # =====================
 # INTERFAZ STREAMLIT
 # =====================
-st.title("🗺️ Visor Meteorológico de El Salvador")
+st.title("🗺️ Visor de Pronostico Meteorológico")
 
 st.sidebar.header("⚙️ Control")
 if st.sidebar.button("🔄 Actualizar Datos / Procesar", type="primary"):
@@ -470,7 +470,7 @@ if 'datos_procesados' in st.session_state:
             st.pyplot(fig)
 
     with tab2:
-        st.subheader("Evolución Pronosticada Diaria (Grid 4x4)")
+        st.subheader("Pronostico de los proximos 16 dias ")
         fig_collage = generar_collage_16_dias(
             datos_var["raster_dict"], datos_var["extent"], datos_var["gdf"], datos_var["hillshade"], var_seleccionada
         )
