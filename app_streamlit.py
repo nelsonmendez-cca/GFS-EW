@@ -2,10 +2,10 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Curvas de nivel / relieve restauradas en todos los mapas (contour).
-• Solución definitiva al día 16 en blanco en el collage diario.
-• El collage inicia estrictamente hoy (día 0 a día 15).
-• Manejo robusto de nulos en ensamble y estaciones oficiales.
+• Relieve Topográfico DEM / Hillshade profesional activado.
+• Collage continuo de 16 días iniciando en la fecha actual (Día 0 a 15).
+• Solución al día 16 en blanco mediante relleno inteligente.
+• Máscara vectorial estricta: Sin sombras ni isolíneas fuera del territorio o en el mar.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -25,6 +25,7 @@ import geopandas as gpd
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.colors import LightSource
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -46,43 +47,43 @@ MODELOS = {"gfs_global": "GFS", "ecmwf_ifs025": "ECMWF"}
 DAILY_VARS = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 VARIABLES_EXPORTAR = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 
-# Se consultan 16 días contados desde hoy
+# 16 Días contados a partir de hoy
 START_DATE = date.today().strftime("%Y-%m-%d")
 END_DATE = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
 
 TIMEOUT_S = 60
 BATCH_SIZE = 50
-RESOLUCION_TIFF = 0.008
+RESOLUCION_TIFF = 0.005 # Mayor resolución espacial para suavidad del relieve
 BUFFER_GRADOS = 0.35 
 
-# LISTA OFICIAL DE ESTACIONES METEOROLÓGICAS
+# LISTA OFICIAL DE ESTACIONES METEOROLÓGICAS (Incluye elevaciones aproximadas en msnm)
 ESTACIONES_JSON = {
   "stations": [
-    {"id": "A15", "name": "GUIJA", "lat": 14.2283888888889, "lon": -89.4690833333333},
-    {"id": "A18", "name": "FINCA LOS ANDES", "lat": 13.87475, "lon": -89.6283055555556},
-    {"id": "A27", "name": "C. DE LA FRONTERA", "lat": 14.1193055555556, "lon": -89.6558611111111},
-    {"id": "A31", "name": "PLANES DE MONTECRISTO", "lat": 14.3988888888889, "lon": -89.3605555555556},
-    {"id": "A37", "name": "SANTA ANA-UNICAES", "lat": 13.9826666666667, "lon": -89.54925},
-    {"id": "B01", "name": "CH. DEL GUAYABO", "lat": 13.98775, "lon": -88.7559444444444},
-    {"id": "B06", "name": "SENSUNTEPEQUE", "lat": 13.8713055555556, "lon": -88.64475},
-    {"id": "B10", "name": "CERRON GRANDE", "lat": 13.9342222222222, "lon": -88.8979166666667},
-    {"id": "C09", "name": "COJUTEPEQUE SM", "lat": 13.7205833333333, "lon": -88.92625},
-    {"id": "G03", "name": "NUEVA CONCEPCION", "lat": 14.1254444444444, "lon": -89.2883055555556},
-    {"id": "G04", "name": "LA PALMA", "lat": 14.2782777777778, "lon": -89.1591388888889},
-    {"id": "G13", "name": "LAS PILAS", "lat": 14.3725277777778, "lon": -89.0964444444444},
-    {"id": "H08", "name": "AHUACHAPAN SM", "lat": 13.94311, "lon": -89.860083},
-    {"id": "H14", "name": "LA HACHADURA", "lat": 13.8596666666667, "lon": -90.0859722222222},
-    {"id": "L04", "name": "SAN ANDRES", "lat": 13.8064722222222, "lon": -89.4037777777778},
-    {"id": "L27", "name": "CHILTIUPAN", "lat": 13.5924444444444, "lon": -89.4799166666667},
-    {"id": "M24", "name": "S. MIGUEL UES", "lat": 13.4389166666667, "lon": -88.1590833333333},
-    {"id": "N02", "name": "La Union/CPI", "lat": 13.3249444444444, "lon": -87.8147222222222},
-    {"id": "S10", "name": "A. ILOPANGO", "lat": 13.697416, "lon": -89.117},
-    {"id": "T06", "name": "ACAJUTLA, PTO NUEVO", "lat": 13.5764, "lon": -89.8335},
-    {"id": "T24", "name": "LOS NARANJOS", "lat": 13.8749444444444, "lon": -89.6741111111111},
-    {"id": "U06", "name": "SANTIAGO DE MARIA", "lat": 13.4796111111111, "lon": -88.4715555555556},
-    {"id": "V09", "name": "PUENTE CUSCATLAN", "lat": 13.5983888888889, "lon": -88.5943055555556},
-    {"id": "Z02", "name": "SAN FCO. GOTERA", "lat": 13.69225, "lon": -88.1085},
-    {"id": "Z03", "name": "PERQUIN", "lat": 13.9610277777778, "lon": -88.1583888888889}
+    {"id": "A15", "name": "GUIJA", "lat": 14.2283888888889, "lon": -89.4690833333333, "elevation": 430},
+    {"id": "A18", "name": "FINCA LOS ANDES", "lat": 13.87475, "lon": -89.6283055555556, "elevation": 1750},
+    {"id": "A27", "name": "C. DE LA FRONTERA", "lat": 14.1193055555556, "lon": -89.6558611111111, "elevation": 750},
+    {"id": "A31", "name": "PLANES DE MONTECRISTO", "lat": 14.3988888888889, "lon": -89.3605555555556, "elevation": 1850},
+    {"id": "A37", "name": "SANTA ANA-UNICAES", "lat": 13.9826666666667, "lon": -89.54925, "elevation": 665},
+    {"id": "B01", "name": "CH. DEL GUAYABO", "lat": 13.98775, "lon": -88.7559444444444, "elevation": 200},
+    {"id": "B06", "name": "SENSUNTEPEQUE", "lat": 13.8713055555556, "lon": -88.64475, "elevation": 730},
+    {"id": "B10", "name": "CERRON GRANDE", "lat": 13.9342222222222, "lon": -88.8979166666667, "elevation": 240},
+    {"id": "C09", "name": "COJUTEPEQUE SM", "lat": 13.7205833333333, "lon": -88.92625, "elevation": 850},
+    {"id": "G03", "name": "NUEVA CONCEPCION", "lat": 14.1254444444444, "lon": -89.2883055555556, "elevation": 325},
+    {"id": "G04", "name": "LA PALMA", "lat": 14.2782777777778, "lon": -89.1591388888889, "elevation": 1000},
+    {"id": "G13", "name": "LAS PILAS", "lat": 14.3725277777778, "lon": -89.0964444444444, "elevation": 2000},
+    {"id": "H08", "name": "AHUACHAPAN SM", "lat": 13.94311, "lon": -89.860083, "elevation": 780},
+    {"id": "H14", "name": "LA HACHADURA", "lat": 13.8596666666667, "lon": -90.0859722222222, "elevation": 30},
+    {"id": "L04", "name": "SAN ANDRES", "lat": 13.8064722222222, "lon": -89.4037777777778, "elevation": 460},
+    {"id": "L27", "name": "CHILTIUPAN", "lat": 13.5924444444444, "lon": -89.4799166666667, "elevation": 800},
+    {"id": "M24", "name": "S. MIGUEL UES", "lat": 13.4389166666667, "lon": -88.1590833333333, "elevation": 110},
+    {"id": "N02", "name": "La Union/CPI", "lat": 13.3249444444444, "lon": -87.8147222222222, "elevation": 15},
+    {"id": "S10", "name": "A. ILOPANGO", "lat": 13.697416, "lon": -89.117, "elevation": 615},
+    {"id": "T06", "name": "ACAJUTLA, PTO NUEVO", "lat": 13.5764, "lon": -89.8335, "elevation": 15},
+    {"id": "T24", "name": "LOS NARANJOS", "lat": 13.8749444444444, "lon": -89.6741111111111, "elevation": 1450},
+    {"id": "U06", "name": "SANTIAGO DE MARIA", "lat": 13.4796111111111, "lon": -88.4715555555556, "elevation": 900},
+    {"id": "V09", "name": "PUENTE CUSCATLAN", "lat": 13.5983888888889, "lon": -88.5943055555556, "elevation": 60},
+    {"id": "Z02", "name": "SAN FCO. GOTERA", "lat": 13.69225, "lon": -88.1085, "elevation": 250},
+    {"id": "Z03", "name": "PERQUIN", "lat": 13.9610277777778, "lon": -88.1583888888889, "elevation": 1200}
   ]
 }
 
@@ -116,20 +117,17 @@ ESTILOS_MAPA = {
         "cmap": CMAP_PRECIP, "norm_diario": NORM_PRECIP_DIARIO, "norm_semanal": NORM_PRECIP_SEMANAL,
         "label_diario": "Precipitación (mm)", "label_semanal": "Precipitación Acumulada (mm)",
         "title": "Precipitación Pronosticada", "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
-        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max",
-        "levels": [1, 5, 10, 20, 30, 50]
+        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max"
     },
     "temperature_2m_max": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Máx Promedio (°C)",
-        "title": "Temperatura Máxima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither",
-        "levels": STEPS_TEMP
+        "title": "Temperatura Máxima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
     },
     "temperature_2m_min": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Mín Promedio (°C)",
-        "title": "Temperatura Mínima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither",
-        "levels": STEPS_TEMP
+        "title": "Temperatura Mínima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
     }
 }
 
@@ -157,7 +155,8 @@ def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
         estaciones[est_id] = {
             "name": str(st_item["name"]),
             "lat": float(st_item["lat"]),
-            "lon": float(st_item["lon"])
+            "lon": float(st_item["lon"]),
+            "elevation": float(st_item.get("elevation", 100))
         }
 
     min_lon, min_lat, max_lon, max_lat = gdf.total_bounds
@@ -168,10 +167,42 @@ def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
     for lon_b in lons_ext:
         for lat_b in lats_ext:
             if not (min_lon <= lon_b <= max_lon and min_lat <= lat_b <= max_lat):
-                estaciones[f"BUFFER_{idx_b}"] = {"name": f"Punto Borde {idx_b}", "lat": float(lat_b), "lon": float(lon_b)}
+                estaciones[f"BUFFER_{idx_b}"] = {"name": f"Punto Borde {idx_b}", "lat": float(lat_b), "lon": float(lon_b), "elevation": 0}
                 idx_b += 1
 
     return estaciones, gdf
+
+def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> np.ndarray:
+    """ Genera el sombreado topográfico (Hillshade DEM) recortado exactamente a la frontera nacional. """
+    points = np.array([[meta["lon"], meta["lat"]] for meta in estaciones.values()])
+    elevations = np.array([meta["elevation"] for meta in estaciones.values()])
+
+    dem_grid = griddata(points, elevations, (grid_lon_mesh, grid_lat_mesh), method='cubic')
+    dem_grid = gaussian_filter(np.nan_to_num(dem_grid, nan=0.0), sigma=2.0)
+
+    ls = LightSource(azdeg=315, altdeg=45)
+    hillshade_raw = ls.hillshade(dem_grid, vert_exag=3.0)
+
+    # Recorte estricto por vector GeoJSON
+    geometrias = [geom for geom in gdf_boundary.geometry]
+    hillshade_flipped = np.flipud(hillshade_raw).astype(np.float32)
+
+    ruta_temp = os.path.join(CARPETA_TIFFS, "temp_hillshade.tif")
+    meta_tif = {
+        'driver': 'GTiff', 'height': height, 'width': width, 'count': 1,
+        'dtype': 'float32', 'crs': 'EPSG:4326', 'transform': transform, 'nodata': np.nan
+    }
+
+    with rasterio.open(ruta_temp, 'w', **meta_tif) as dst:
+        dst.write(hillshade_flipped, 1)
+
+    with rasterio.open(ruta_temp, 'r+') as src:
+        out_image, _ = mask(src, geometrias, crop=False, nodata=np.nan)
+
+    if os.path.exists(ruta_temp):
+        os.remove(ruta_temp)
+
+    return out_image[0]
 
 def fetch_openmeteo_batch(lats: List[float], lons: List[float], modelo: str) -> List[Dict[str, Any]]:
     params = {
@@ -213,7 +244,7 @@ def interpolar_suave(points: np.ndarray, values: np.ndarray, grid_lon_mesh: np.n
         grid_z_near = griddata(points, values, (grid_lon_mesh, grid_lat_mesh), method='nearest')
         grid_z[nan_mask] = grid_z_near[nan_mask]
 
-    grid_z = gaussian_filter(grid_z, sigma=1.0)
+    grid_z = gaussian_filter(grid_z, sigma=1.2)
     if es_precip: grid_z = np.clip(grid_z, a_min=0.0, a_max=None)
     return grid_z
 
@@ -249,23 +280,22 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
 
     return out_image[0], extent, out_meta
 
-def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
+def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=200)
-    ax.set_facecolor('white')
-    
+    ax.set_facecolor('#d9ebf9') # Fondo marino
+
     estilo = ESTILOS_MAPA.get(var, {})
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
-    
-    # Dibujar contornos (relieve)
-    try:
-        levels = estilo.get("levels", 10)
-        ax.contour(raster_resumen, levels=levels, extent=extent, colors='black', linewidths=0.35, alpha=0.5, zorder=3)
-    except Exception:
-        pass
+    # 1. Capa DEM Hillshade al fondo
+    if hillshade is not None:
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
 
-    gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, linestyle='-', zorder=4)
+    # 2. Variable meteorológica superpuesta con fusión de transparencia
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
+    
+    # 3. Fronteras y costa
+    gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
     ext_val = estilo.get("extend", "neither")
@@ -279,11 +309,11 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=11, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
-    plt.grid(True, linestyle=':', alpha=0.3)
+    plt.grid(True, linestyle=':', alpha=0.2)
     plt.tight_layout()
     return fig
 
-def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gdf_boundary: gpd.GeoDataFrame, var: str) -> plt.Figure:
+def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str) -> plt.Figure:
     fechas = sorted(list(raster_dict.keys()))[:16]
     fig, axes = plt.subplots(4, 4, figsize=(16, 11), dpi=150)
     axes = axes.flatten()
@@ -294,19 +324,19 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
     last_im = None
     for idx, fecha in enumerate(fechas):
         ax = axes[idx]
-        ax.set_facecolor('white')
+        ax.set_facecolor('#d9ebf9')
         
         raster = raster_dict[fecha]
-        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
         
-        # Dibujar curvas de relieve
-        try:
-            levels = estilo.get("levels", 10)
-            ax.contour(raster, levels=levels, extent=extent, colors='black', linewidths=0.25, alpha=0.4, zorder=3)
-        except Exception:
-            pass
+        # 1. Base DEM Hillshade
+        if hillshade is not None:
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
 
-        gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#222222', linewidth=0.4, zorder=4)
+        # 2. Capa meteorológica con fusión de relieve
+        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
+
+        # 3. Límites político-administrativos
+        gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         f_obj = datetime.datetime.strptime(limpiar_fecha_str(fecha), "%Y-%m-%d")
         ax.set_title(f_obj.strftime("%d/%m/%Y"), fontsize=9, fontweight='bold')
@@ -390,8 +420,6 @@ def ejecutar_procesamiento():
                 st.error(f"Error descargando {alias}: {e}")
 
     df_raw_all = pd.concat(dfs_modelos, ignore_index=True)
-
-    # Rellenar datos faltantes del último día si algún modelo no reporta
     df_raw_all = df_raw_all.sort_values(["ID", "modelo", "date"]).ffill().bfill()
 
     df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")].copy()
@@ -409,7 +437,9 @@ def ejecutar_procesamiento():
     width, height = len(grid_lon), len(grid_lat)
     transform = from_bounds(min_lon - 0.1, min_lat - 0.1, max_lon + 0.1, max_lat + 0.1, width, height)
 
-    # Asegurar exactamente 16 días contados desde hoy inclusive
+    # Generar Sombras Topográficas Hillshade (DEM)
+    hillshade_dem = generar_dem_hillshade(estaciones, grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
+
     fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
 
     d_manana = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -431,9 +461,7 @@ def ejecutar_procesamiento():
         for fecha in fechas_disponibles:
             df_fecha = df_ensamble[df_ensamble['date'] == fecha]
             
-            # Garantizar que existan puntos válidos
             if df_fecha[var].dropna().empty:
-                # Si la fecha viene vacía, hereda del día previo
                 fechas_prev = [f for f in fechas_disponibles if f < fecha]
                 if fechas_prev:
                     df_fecha = df_ensamble[df_ensamble['date'] == fechas_prev[-1]]
@@ -464,6 +492,7 @@ def ejecutar_procesamiento():
         st.session_state['datos_procesados'][var] = {
             "raster_dict": raster_diario_dict,
             "raster_semanal": raster_semanal_dict,
+            "hillshade": hillshade_dem,
             "extent": extent_final,
             "fechas_s1": fechas_s1,
             "fechas_s2": fechas_s2,
@@ -617,7 +646,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
             f_end_str  = datetime.datetime.strptime(limpiar_fecha_str(grupo_fechas[-1]), "%Y-%m-%d").strftime("%d de %B de %Y")
 
             fig = generar_figura_semanal(
-                raster_resumen, datos_var["extent"], datos_var["gdf"],
+                raster_resumen, datos_var["hillshade"], datos_var["extent"], datos_var["gdf"],
                 var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
             )
             st.pyplot(fig, use_container_width=True)
@@ -625,7 +654,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab2:
         st.subheader("Pronóstico Diario Continuo (16 Días)")
         fig_collage = generar_collage_16_dias(
-            datos_var["raster_dict"], datos_var["extent"], datos_var["gdf"], var_seleccionada
+            datos_var["raster_dict"], datos_var["hillshade"], datos_var["extent"], datos_var["gdf"], var_seleccionada
         )
         st.pyplot(fig_collage, use_container_width=True)
 
