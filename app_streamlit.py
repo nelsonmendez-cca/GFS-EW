@@ -3,6 +3,8 @@
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
 • Escala de temperatura fija personalizada (8°C a 40°C exactos).
+• Carga directa de estaciones meteorológicas oficiales en tablas y gráficos.
+• Colores personalizados para el perfil térmico diario (#f57046, #b7ee40, #eee152).
 • Conservación intacta de la paleta y rangos de precipitación.
 • Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
 • Buffer de Bounding Box para eliminar artefactos en bordes.
@@ -57,6 +59,37 @@ BATCH_SIZE = 50
 RESOLUCION_TIFF = 0.008
 BUFFER_GRADOS = 0.35 
 
+# LISTA OFICIAL DE ESTACIONES METEOROLÓGICAS
+ESTACIONES_JSON = {
+  "stations": [
+    {"id": "A15", "name": "GUIJA", "lat": 14.2283888888889, "lon": -89.4690833333333},
+    {"id": "A18", "name": "FINCA LOS ANDES", "lat": 13.87475, "lon": -89.6283055555556},
+    {"id": "A27", "name": "C. DE LA FRONTERA", "lat": 14.1193055555556, "lon": -89.6558611111111},
+    {"id": "A31", "name": "PLANES DE MONTECRISTO", "lat": 14.3988888888889, "lon": -89.3605555555556},
+    {"id": "A37", "name": "SANTA ANA-UNICAES", "lat": 13.9826666666667, "lon": -89.54925},
+    {"id": "B01", "name": "CH. DEL GUAYABO", "lat": 13.98775, "lon": -88.7559444444444},
+    {"id": "B06", "name": "SENSUNTEPEQUE", "lat": 13.8713055555556, "lon": -88.64475},
+    {"id": "B10", "name": "CERRON GRANDE", "lat": 13.9342222222222, "lon": -88.8979166666667},
+    {"id": "C09", "name": "COJUTEPEQUE SM", "lat": 13.7205833333333, "lon": -88.92625},
+    {"id": "G03", "name": "NUEVA CONCEPCION", "lat": 14.1254444444444, "lon": -89.2883055555556},
+    {"id": "G04", "name": "LA PALMA", "lat": 14.2782777777778, "lon": -89.1591388888889},
+    {"id": "G13", "name": "LAS PILAS", "lat": 14.3725277777778, "lon": -89.0964444444444},
+    {"id": "H08", "name": "AHUACHAPAN SM", "lat": 13.94311, "lon": -89.860083},
+    {"id": "H14", "name": "LA HACHADURA", "lat": 13.8596666666667, "lon": -90.0859722222222},
+    {"id": "L04", "name": "SAN ANDRES", "lat": 13.8064722222222, "lon": -89.4037777777778},
+    {"id": "L27", "name": "CHILTIUPAN", "lat": 13.5924444444444, "lon": -89.4799166666667},
+    {"id": "M24", "name": "S. MIGUEL UES", "lat": 13.4389166666667, "lon": -88.1590833333333},
+    {"id": "N02", "name": "La Union/CPI", "lat": 13.3249444444444, "lon": -87.8147222222222},
+    {"id": "S10", "name": "A. ILOPANGO", "lat": 13.697416, "lon": -89.117},
+    {"id": "T06", "name": "ACAJUTLA, PTO NUEVO", "lat": 13.5764, "lon": -89.8335},
+    {"id": "T24", "name": "LOS NARANJOS", "lat": 13.8749444444444, "lon": -89.6741111111111},
+    {"id": "U06", "name": "SANTIAGO DE MARIA", "lat": 13.4796111111111, "lon": -88.4715555555556},
+    {"id": "V09", "name": "PUENTE CUSCATLAN", "lat": 13.5983888888889, "lon": -88.5943055555556},
+    {"id": "Z02", "name": "SAN FCO. GOTERA", "lat": 13.69225, "lon": -88.1085},
+    {"id": "Z03", "name": "PERQUIN", "lat": 13.9610277777778, "lon": -88.1583888888889}
+  ]
+}
+
 # --- PALETA DE COLOR PRECIPITACIÓN (SIN CAMBIOS) ---
 colores_precip_rgb = np.array([
     [255, 255, 255], [230, 245, 255], [190, 225, 255], [140, 205, 255],
@@ -71,7 +104,7 @@ NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colo
 BOUNDS_PRECIP_SEMANAL = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250]
 NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
 
-# --- PALETA DE COLOR TEMPERATURA FIJA (CORREGIDA CON EXTEND='NEITHER') ---
+# --- PALETA DE COLOR TEMPERATURA FIJA ---
 STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
 COLORES_TEMP = [
     "#1922FB", "#3B56FC", "#4780FC", "#43A5FD", "#28CCFE", "#00F0FE",
@@ -119,41 +152,24 @@ session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 def limpiar_fecha_str(fecha_val: Any) -> str:
     return str(fecha_val).split()[0].split("T")[0]
 
-def extraer_centroide(coords: Any) -> tuple:
-    puntos = []
-    def aplanar(c):
-        if isinstance(c[0], (float, int)): puntos.append(c)
-        else:
-            for sub in c: aplanar(sub)
-    aplanar(coords)
-    return (sum(p[0] for p in puntos)/len(puntos), sum(p[1] for p in puntos)/len(puntos)) if puntos else (0.0, 0.0)
-
 @st.cache_data
-def cargar_estaciones_ampliadas(ruta: str, buffer_deg: float) -> tuple:
-    if not os.path.exists(ruta):
-        st.error(f"❌ No se encontró el archivo GeoJSON: {ruta}")
+def cargar_estaciones_desde_dict(ruta_geojson: str, buffer_deg: float) -> tuple:
+    if not os.path.exists(ruta_geojson):
+        st.error(f"❌ No se encontró el archivo GeoJSON: {ruta_geojson}")
         return {}, None
 
-    gdf = gpd.read_file(ruta)
+    gdf = gpd.read_file(ruta_geojson)
     if gdf.crs is None or gdf.crs.to_epsg() != 4326:
         gdf = gdf.set_crs(epsg=4326, allow_override=True)
 
-    with open(ruta, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
     estaciones = {}
-    if isinstance(raw, dict) and raw.get("type") == "FeatureCollection":
-        for i, feat in enumerate(raw.get("features", [])):
-            props, geom = feat.get("properties", {}), feat.get("geometry", {})
-            est_id = str(props.get("id", props.get("ID", f"GEO_{i+1}")))
-            nombre = str(props.get("name", props.get("NOMBRE", est_id)))
-            gtype, coords = geom.get("type", ""), geom.get("coordinates", [])
-
-            if gtype == "Point": lon, lat = coords[0], coords[1]
-            elif gtype in ["Polygon", "MultiPolygon"]: lon, lat = extraer_centroide(coords)
-            else: continue
-
-            estaciones[est_id] = {"name": nombre, "lat": float(lat), "lon": float(lon)}
+    for st_item in ESTACIONES_JSON["stations"]:
+        est_id = str(st_item["id"])
+        estaciones[est_id] = {
+            "name": str(st_item["name"]),
+            "lat": float(st_item["lat"]),
+            "lon": float(st_item["lon"])
+        }
 
     min_lon, min_lat, max_lon, max_lat = gdf.total_bounds
     lons_ext = np.linspace(min_lon - buffer_deg, max_lon + buffer_deg, 6)
@@ -357,7 +373,7 @@ def crear_zip_tiffs(var_seleccionada: str) -> bytes:
     return buffer_zip.getvalue()
 
 def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulado: bool = True) -> pd.DataFrame:
-    """ Genera la matriz pivote Estación vs Fechas con formato idéntico al de la imagen. """
+    """ Genera la matriz pivote Estación vs Fechas con formato idéntico al oficial. """
     df_ens = df_raw.groupby(["ID", "NAME", "date"])[variable].mean().reset_index()
     piv = df_ens.pivot(index=["ID", "NAME"], columns="date", values=variable).reset_index()
     
@@ -384,7 +400,7 @@ def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulad
 #  LÓGICA PRINCIPAL
 # =====================
 def ejecutar_procesamiento():
-    estaciones, gdf_boundary = cargar_estaciones_ampliadas(ARCHIVO_ESTACIONES, BUFFER_GRADOS)
+    estaciones, gdf_boundary = cargar_estaciones_desde_dict(ARCHIVO_ESTACIONES, BUFFER_GRADOS)
     if not estaciones: return
 
     os.makedirs(CARPETA_TIFFS, exist_ok=True)
@@ -512,23 +528,23 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico ECMWF & GFS en columnas
+    # 2. Perfil Térmico ECMWF & GFS con los colores requeridos (#f57046, #b7ee40, #eee152)
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### 🇪🇺 Modelo Europeo (ECMWF)")
         fig_eur = go.Figure()
-        fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#d62728", width=2)))
-        fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#2ca02c", width=2, dash="dash")))
-        fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#17becf", width=2)))
+        fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
+        fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
+        fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#eee152", width=2.5)))
         fig_eur.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_eur, use_container_width=True)
 
     with col_g2:
         st.markdown("#### 🇺🇸 Modelo GFS")
         fig_gfs = go.Figure()
-        fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#e377c2", width=2)))
-        fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#bcbd22", width=2, dash="dash")))
-        fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#8c564b", width=2)))
+        fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
+        fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
+        fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#eee152", width=2.5)))
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
