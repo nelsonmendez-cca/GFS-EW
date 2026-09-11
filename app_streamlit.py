@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Interfaz Interactiva con Streamlit - El Salvador
----------------------------------------------------------------------------------------
-• Relieve Topográfico DEM / Hillshade profesional activado.
-• Collage continuo de 16 días iniciando en la fecha actual (Día 0 a 15).
-• Solución al día 16 en blanco mediante relleno inteligente.
-• Máscara vectorial estricta: Sin sombras ni isolíneas fuera del territorio o en el mar.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -183,7 +178,6 @@ def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray,
     ls = LightSource(azdeg=315, altdeg=45)
     hillshade_raw = ls.hillshade(dem_grid, vert_exag=3.0)
 
-    # Recorte estricto por vector GeoJSON
     geometrias = [geom for geom in gdf_boundary.geometry]
     hillshade_flipped = np.flipud(hillshade_raw).astype(np.float32)
 
@@ -282,19 +276,15 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
 
 def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=200)
-    ax.set_facecolor('#d9ebf9') # Fondo marino
+    ax.set_facecolor('#d9ebf9')
 
     estilo = ESTILOS_MAPA.get(var, {})
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
-    # 1. Capa DEM Hillshade al fondo
     if hillshade is not None:
         ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
 
-    # 2. Variable meteorológica superpuesta con fusión de transparencia
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
-    
-    # 3. Fronteras y costa
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
@@ -328,14 +318,10 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         
         raster = raster_dict[fecha]
         
-        # 1. Base DEM Hillshade
         if hillshade is not None:
             ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
 
-        # 2. Capa meteorológica con fusión de relieve
         last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
-
-        # 3. Límites político-administrativos
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         f_obj = datetime.datetime.strptime(limpiar_fecha_str(fecha), "%Y-%m-%d")
@@ -437,7 +423,6 @@ def ejecutar_procesamiento():
     width, height = len(grid_lon), len(grid_lat)
     transform = from_bounds(min_lon - 0.1, min_lat - 0.1, max_lon + 0.1, max_lat + 0.1, width, height)
 
-    # Generar Sombras Topográficas Hillshade (DEM)
     hillshade_dem = generar_dem_hillshade(estaciones, grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
 
     fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
@@ -536,7 +521,7 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico
+    # 2. Perfil Térmico (Color azul #5593ff en T. Mínima)
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### Modelo Europeo (ECMWF)")
@@ -544,7 +529,7 @@ def render_graficos_promedio():
         if "ECMWF" in piv_tmax.columns:
             fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
             fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
-            fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#ffffff", width=2.5)))
+            fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#5593ff", width=2.5)))
         fig_eur.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_eur, use_container_width=True)
 
@@ -554,28 +539,38 @@ def render_graficos_promedio():
         if "GFS" in piv_tmax.columns:
             fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
             fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
-            fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#ffffff", width=2.5)))
+            fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#5593ff", width=2.5)))
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
+    # Cálculo de la columna T. Media en raw data
+    df_raw["temperature_2m_mean"] = (df_raw["temperature_2m_max"] + df_raw["temperature_2m_min"]) / 2.0
+
+    # Construcción de matrices por estación
     df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
+    df_matriz_tmean = construir_matriz_estaciones(df_raw, "temperature_2m_mean", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    with st.expander("📋 Ver Matrices por Estaciones (Formato Tabla)", expanded=True):
+    with st.expander("📋 Ver Matrices por Estaciones (Pronostico)", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
-        st.dataframe(df_matriz_precip, use_container_width=True, height=250)
+        st.dataframe(df_matriz_precip, use_container_width=True, height=220)
 
         st.markdown("##### 🌡️ Temperatura Máxima por Estación (°C)")
-        st.dataframe(df_matriz_tmax, use_container_width=True, height=250)
+        st.dataframe(df_matriz_tmax, use_container_width=True, height=220)
+
+        st.markdown("##### 🌤️ Temperatura Media por Estación (°C)")
+        st.dataframe(df_matriz_tmean, use_container_width=True, height=220)
 
         st.markdown("##### ❄️ Temperatura Mínima por Estación (°C)")
-        st.dataframe(df_matriz_tmin, use_container_width=True, height=250)
+        st.dataframe(df_matriz_tmin, use_container_width=True, height=220)
 
+    # Exportación a Excel con las 4 pestañas
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df_matriz_precip.to_excel(writer, sheet_name='Precipitacion_Estaciones', index=False)
         df_matriz_tmax.to_excel(writer, sheet_name='TMax_Estaciones', index=False)
+        df_matriz_tmean.to_excel(writer, sheet_name='TMedia_Estaciones', index=False)
         df_matriz_tmin.to_excel(writer, sheet_name='TMin_Estaciones', index=False)
 
     st.session_state['excel_buffer'] = buffer.getvalue()
@@ -620,7 +615,7 @@ if 'excel_buffer' in st.session_state:
     )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (GFS & ECMWF)")
+st.sidebar.caption("📌 **El Salvador CCA Visor**\nFuente: Open-Meteo API ")
 
 # =====================
 #  ÁREA PRINCIPAL
@@ -635,7 +630,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab1:
         col_rad, col_space = st.columns([1, 2])
         with col_rad:
-            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
+            semana = st.radio("Período de Análisis:", ["Semana 1 ", "Semana 2 "], horizontal=True)
         
         key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
         grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
@@ -652,7 +647,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
             st.pyplot(fig, use_container_width=True)
 
     with tab2:
-        st.subheader("Pronóstico Diario Continuo (16 Días)")
+        st.subheader("Pronóstico Diario Continuo")
         fig_collage = generar_collage_16_dias(
             datos_var["raster_dict"], datos_var["hillshade"], datos_var["extent"], datos_var["gdf"], var_seleccionada
         )
