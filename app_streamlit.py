@@ -2,11 +2,12 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
+• Escala de temperatura fija personalizada (8°C a 40°C).
+• Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
 • Buffer de Bounding Box para eliminar artefactos en bordes.
 • Elevación y Relieve Real (DEM) limitado al país.
 • Generación de Collage de 16 Días (4x4).
 • Descarga de capas GeoTIFF empacadas en ZIP.
-• Módulo de Gráficos Promedio Nacional (Precipitación y Temperatura GFS vs ECMWF vs Ensamble) y descarga en Excel.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -55,19 +56,30 @@ BATCH_SIZE = 50
 RESOLUCION_TIFF = 0.008
 BUFFER_GRADOS = 0.35 
 
-# --- PALETA DE COLOR RGB ---
-colores_rgb = np.array([
+# --- PALETA DE COLOR PRECIPITACIÓN ---
+colores_precip_rgb = np.array([
     [255, 255, 255], [230, 245, 255], [190, 225, 255], [140, 205, 255],
     [90,  170, 255], [50,  120, 255], [80,  80,  255], [120, 60,  255],
     [170, 30,  255], [255, 0,   255], [180, 0,   180]
 ]) / 255.0
 
-CMAP_PRECIP = mcolors.ListedColormap(colores_rgb)
+CMAP_PRECIP = mcolors.ListedColormap(colores_precip_rgb)
 BOUNDS_PRECIP_DIARIO = [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50]
-NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colores_rgb), extend='max')
+NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colores_precip_rgb), extend='max')
 
 BOUNDS_PRECIP_SEMANAL = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250]
-NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_rgb), extend='max')
+NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
+
+# --- PALETA DE COLOR TEMPERATURA FIJA ---
+STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
+COLORES_TEMP = [
+    "#1922FB", "#3B56FC", "#4780FC", "#43A5FD", "#28CCFE", "#00F0FE",
+    "#55FCE7", "#96FCC8", "#BDFDA4", "#DAFD7E", "#F0FD57", "#FFF32F",
+    "#FFD228", "#FFB220", "#FF8D18", "#FF6610", "#FF2B06"
+]
+
+CMAP_TEMP = mcolors.ListedColormap(COLORES_TEMP)
+NORM_TEMP = mcolors.BoundaryNorm(STEPS_TEMP, ncolors=len(COLORES_TEMP), extend='both')
 
 ESTILOS_MAPA = {
     "precipitation_sum": {
@@ -81,14 +93,16 @@ ESTILOS_MAPA = {
         "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250],
     },
     "temperature_2m_max": {
-        "cmap": "YlOrRd", "norm_diario": None, "norm_semanal": None,
+        "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Máx Promedio (°C)",
         "title": "Temperatura Máxima",
+        "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
     },
     "temperature_2m_min": {
-        "cmap": "YlGnBu_r", "norm_diario": None, "norm_semanal": None,
+        "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Mín Promedio (°C)",
         "title": "Temperatura Mínima",
+        "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
     }
 }
 
@@ -272,7 +286,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
 
     label_cbar = estilo.get("label_semanal", var)
     if estilo.get("ticks_semanal"):
-        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend='max')
+        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend='both' if 'temperature' in var else 'max')
     else:
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
@@ -318,7 +332,7 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
     if last_im:
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
         if estilo.get("ticks_diario"):
-            fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var))
+            fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend='both' if 'temperature' in var else 'max')
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
 
@@ -334,6 +348,33 @@ def crear_zip_tiffs(var_seleccionada: str) -> bytes:
                 zip_file.write(ruta_completa, arcname=archivo)
     buffer_zip.seek(0)
     return buffer_zip.getvalue()
+
+def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulado: bool = True) -> pd.DataFrame:
+    """ Genera la matriz pivote Estación vs Fechas con formato identico a la imagen. """
+    df_ens = df_raw.groupby(["ID", "NAME", "date"])[variable].mean().reset_index()
+    piv = df_ens.pivot(index=["ID", "NAME"], columns="date", values=variable).reset_index()
+    
+    fechas_cols = [c for c in piv.columns if c not in ["ID", "NAME"]]
+    
+    if es_acumulado:
+        piv["TOTAL"] = piv[fechas_cols].sum(axis=1)
+    else:
+        piv["TOTAL"] = piv[fechas_cols].mean(axis=1)
+        
+    piv = piv.round(1)
+
+    row_prom = {"ID": "", "NAME": "prom. Nac.diario"}
+    for f in fechas_cols:
+        row_prom[f] = round(piv[f].mean(), 1)
+    
+    if es_acumulado:
+        row_prom["TOTAL"] = round(piv["TOTAL"].mean(), 1)
+    else:
+        row_prom["TOTAL"] = round(piv["TOTAL"].mean(), 1)
+
+    df_final = pd.concat([piv, pd.DataFrame([row_prom])], ignore_index=True)
+    df_final = df_final.rename(columns={"ID": "Estacion", "NAME": "Estacion_Nombre"})
+    return df_final
 
 # =====================
 #  LÓGICA PRINCIPAL
@@ -437,7 +478,7 @@ def ejecutar_procesamiento():
     st.sidebar.success("🎉 Datos cargados exitosamente.")
 
 def render_graficos_promedio():
-    st.subheader("📊 Promedio Nacional Diario (25 Estaciones)")
+    st.subheader("📊 Promedio Nacional y Datos por Estación")
     
     if 'df_raw_all' not in st.session_state:
         st.info("👈 Haga clic en **'🔄 Cargar / Actualizar Datos'** en el panel izquierdo para generar los gráficos.")
@@ -470,7 +511,7 @@ def render_graficos_promedio():
     # 2. Perfil Térmico ECMWF & GFS en columnas
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.markdown("#### Modelo Europeo (ECMWF)")
+        st.markdown("#### 🇪🇺 Modelo Europeo (ECMWF)")
         fig_eur = go.Figure()
         fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#d62728", width=2)))
         fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#2ca02c", width=2, dash="dash")))
@@ -479,7 +520,7 @@ def render_graficos_promedio():
         st.plotly_chart(fig_eur, use_container_width=True)
 
     with col_g2:
-        st.markdown("#### Modelo GFS")
+        st.markdown("#### 🇺🇸 Modelo GFS")
         fig_gfs = go.Figure()
         fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#e377c2", width=2)))
         fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#bcbd22", width=2, dash="dash")))
@@ -487,44 +528,25 @@ def render_graficos_promedio():
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # 3. Ensamble Consolidado
-    st.markdown("#### 🌐 Modelo Consolidado ")
-    fig_ens = go.Figure()
-    fig_ens.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["Ensamble"], name="T. Máxima Ensamble", mode="lines+markers", line=dict(color="#d62728", width=3)))
-    fig_ens.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["Ensamble"], name="T. Media Ensamble", mode="lines+markers", line=dict(color="#7f7f7f", width=3, dash="dash")))
-    fig_ens.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["Ensamble"], name="T. Mínima Ensamble", mode="lines+markers", line=dict(color="#1f77b4", width=3)))
-    fig_ens.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
-    st.plotly_chart(fig_ens, use_container_width=True)
+    # Construir matrices por estación estilo foto
+    df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
+    df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
+    df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    # Tablas de Resumen
-    with st.expander("📋 Ver Tablas de Datos Promedio"):
-        df_rain_export = piv_rain.rename(columns={"ECMWF": "Lluvia ECMWF (mm)", "GFS": "Lluvia GFS (mm)", "Ensamble": "Lluvia Ensamble (mm)"})
-        df_temp_export = pd.DataFrame({
-            "Fecha": piv_tmax["date"],
-            "TMax ECMWF (°C)": piv_tmax["ECMWF"],
-            "TMin ECMWF (°C)": piv_tmin["ECMWF"],
-            "TMedia ECMWF (°C)": piv_tmean["ECMWF"],
-            "TMax GFS (°C)": piv_tmax["GFS"],
-            "TMin GFS (°C)": piv_tmin["GFS"],
-            "TMedia GFS (°C)": piv_tmean["GFS"],
-            "TMax Ensamble (°C)": piv_tmax["Ensamble"],
-            "TMin Ensamble (°C)": piv_tmin["Ensamble"],
-            "TMedia Ensamble (°C)": piv_tmean["Ensamble"]
-        })
+    # Vista previa en pantalla
+    with st.expander("📋 Ver Matriz por Estaciones (Formato Tabla)", expanded=True):
+        st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
+        st.dataframe(df_matriz_precip, use_container_width=True, height=300)
 
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            st.markdown("**Precipitación Promedio Nacional**")
-            st.dataframe(df_rain_export, use_container_width=True, height=250)
-        with col_t2:
-            st.markdown("**Temperaturas Promedio Nacional**")
-            st.dataframe(df_temp_export, use_container_width=True, height=250)
+        st.markdown("##### 🌡️ Temperatura Máxima por Estación (°C)")
+        st.dataframe(df_matriz_tmax, use_container_width=True, height=250)
 
-    # Descarga Excel en la barra lateral
+    # Descarga Excel con formato multicapa en la barra lateral
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_rain_export.to_excel(writer, sheet_name='Precipitacion_Promedio', index=False)
-        df_temp_export.to_excel(writer, sheet_name='Temperaturas_Promedio', index=False)
+        df_matriz_precip.to_excel(writer, sheet_name='Precipitacion_Estaciones', index=False)
+        df_matriz_tmax.to_excel(writer, sheet_name='TMax_Estaciones', index=False)
+        df_matriz_tmin.to_excel(writer, sheet_name='TMin_Estaciones', index=False)
 
     st.session_state['excel_buffer'] = buffer.getvalue()
 
@@ -563,9 +585,9 @@ if 'datos_procesados' in st.session_state:
 # Descarga de Excel si los gráficos fueron generados
 if 'excel_buffer' in st.session_state:
     st.sidebar.download_button(
-        label="📥 Reporte Promedios (.XLSX)",
+        label="📥 Matriz Estaciones (.XLSX)",
         data=st.session_state['excel_buffer'],
-        file_name=f"Promedios_Meteorologicos_SV_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+        file_name=f"Reporte_Estaciones_SV_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
@@ -578,7 +600,7 @@ st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (
 # =====================
 st.title("🗺️ Visor de Pronóstico Meteorológico - El Salvador")
 
-tab1, tab2, tab3 = st.tabs(["📅 Resumen Semanal", "🗓️ Collage 16 Días", "📊 Gráficos Promedio Nacional"])
+tab1, tab2, tab3 = st.tabs(["📅 Resumen Semanal", "🗓️ Collage 16 Días", "📊 Gráficos & Estaciones"])
 
 if 'datos_procesados' in st.session_state and var_seleccionada:
     datos_var = st.session_state['datos_procesados'][var_seleccionada]
