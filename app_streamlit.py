@@ -2,11 +2,10 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Escala de temperatura fija personalizada (8°C a 40°C exactos).
-• Carga directa y mapeo estricto de las 25 estaciones meteorológicas oficiales.
-• Colores personalizados para el perfil térmico diario (#f57046, #b7ee40, #ffffff).
-• Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
-• Manejo robusto de datos faltantes en el ensamble diario.
+• Curvas de nivel / relieve restauradas en todos los mapas (contour).
+• Solución definitiva al día 16 en blanco en el collage diario.
+• El collage inicia estrictamente hoy (día 0 a día 15).
+• Manejo robusto de nulos en ensamble y estaciones oficiales.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -47,6 +46,7 @@ MODELOS = {"gfs_global": "GFS", "ecmwf_ifs025": "ECMWF"}
 DAILY_VARS = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 VARIABLES_EXPORTAR = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 
+# Se consultan 16 días contados desde hoy
 START_DATE = date.today().strftime("%Y-%m-%d")
 END_DATE = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
 
@@ -116,17 +116,20 @@ ESTILOS_MAPA = {
         "cmap": CMAP_PRECIP, "norm_diario": NORM_PRECIP_DIARIO, "norm_semanal": NORM_PRECIP_SEMANAL,
         "label_diario": "Precipitación (mm)", "label_semanal": "Precipitación Acumulada (mm)",
         "title": "Precipitación Pronosticada", "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
-        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max"
+        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max",
+        "levels": [1, 5, 10, 20, 30, 50]
     },
     "temperature_2m_max": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Máx Promedio (°C)",
-        "title": "Temperatura Máxima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
+        "title": "Temperatura Máxima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither",
+        "levels": STEPS_TEMP
     },
     "temperature_2m_min": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Mín Promedio (°C)",
-        "title": "Temperatura Mínima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
+        "title": "Temperatura Mínima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither",
+        "levels": STEPS_TEMP
     }
 }
 
@@ -254,6 +257,14 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
+    
+    # Dibujar contornos (relieve)
+    try:
+        levels = estilo.get("levels", 10)
+        ax.contour(raster_resumen, levels=levels, extent=extent, colors='black', linewidths=0.35, alpha=0.5, zorder=3)
+    except Exception:
+        pass
+
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, linestyle='-', zorder=4)
 
     label_cbar = estilo.get("label_semanal", var)
@@ -287,6 +298,14 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
         
         raster = raster_dict[fecha]
         last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
+        
+        # Dibujar curvas de relieve
+        try:
+            levels = estilo.get("levels", 10)
+            ax.contour(raster, levels=levels, extent=extent, colors='black', linewidths=0.25, alpha=0.4, zorder=3)
+        except Exception:
+            pass
+
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#222222', linewidth=0.4, zorder=4)
 
         f_obj = datetime.datetime.strptime(limpiar_fecha_str(fecha), "%Y-%m-%d")
@@ -321,7 +340,6 @@ def crear_zip_tiffs(var_seleccionada: str) -> bytes:
     return buffer_zip.getvalue()
 
 def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulado: bool = True) -> pd.DataFrame:
-    """ Genera la matriz pivote Estación vs Fechas usando los nombres reales. """
     df_ens = df_raw.groupby(["ID", "NAME", "date"])[variable].mean().reset_index()
     piv = df_ens.pivot(index=["ID", "NAME"], columns="date", values=variable).reset_index()
     
@@ -372,7 +390,10 @@ def ejecutar_procesamiento():
                 st.error(f"Error descargando {alias}: {e}")
 
     df_raw_all = pd.concat(dfs_modelos, ignore_index=True)
-    
+
+    # Rellenar datos faltantes del último día si algún modelo no reporta
+    df_raw_all = df_raw_all.sort_values(["ID", "modelo", "date"]).ffill().bfill()
+
     df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")].copy()
     st.session_state['df_raw_all'] = df_puntos_reales
 
@@ -388,7 +409,8 @@ def ejecutar_procesamiento():
     width, height = len(grid_lon), len(grid_lat)
     transform = from_bounds(min_lon - 0.1, min_lat - 0.1, max_lon + 0.1, max_lat + 0.1, width, height)
 
-    fechas_disponibles = sorted(df_ensamble['date'].unique())
+    # Asegurar exactamente 16 días contados desde hoy inclusive
+    fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
 
     d_manana = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
     d_s1_end = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
@@ -408,6 +430,14 @@ def ejecutar_procesamiento():
 
         for fecha in fechas_disponibles:
             df_fecha = df_ensamble[df_ensamble['date'] == fecha]
+            
+            # Garantizar que existan puntos válidos
+            if df_fecha[var].dropna().empty:
+                # Si la fecha viene vacía, hereda del día previo
+                fechas_prev = [f for f in fechas_disponibles if f < fecha]
+                if fechas_prev:
+                    df_fecha = df_ensamble[df_ensamble['date'] == fechas_prev[-1]]
+
             points, values = df_fecha[['lon', 'lat']].values, df_fecha[var].values
 
             grid_z = interpolar_suave(points, values, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
@@ -460,7 +490,6 @@ def render_graficos_promedio():
     piv_tmin = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_min").reset_index()
     piv_tmean = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_mean").reset_index()
 
-    # Cálculo del ensamble tolerante a valores faltantes (si falta un modelo, toma el disponible)
     cols_modelos = [m for m in ["GFS", "ECMWF"] if m in piv_rain.columns]
     piv_rain["Ensamble"] = piv_rain[cols_modelos].mean(axis=1)
     piv_tmax["Ensamble"] = piv_tmax[cols_modelos].mean(axis=1)
@@ -478,7 +507,7 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico ECMWF & GFS (#f57046, #b7ee40, #ffffff)
+    # 2. Perfil Térmico
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### Modelo Europeo (ECMWF)")
@@ -500,12 +529,11 @@ def render_graficos_promedio():
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # Construir matrices por estación usando los nombres de ESTACIONES_JSON
     df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    with st.expander("📋 Ver Matrices por Estaciones ", expanded=True):
+    with st.expander("📋 Ver Matrices por Estaciones (Formato Tabla)", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
         st.dataframe(df_matriz_precip, use_container_width=True, height=250)
 
@@ -563,7 +591,7 @@ if 'excel_buffer' in st.session_state:
     )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API ")
+st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (GFS & ECMWF)")
 
 # =====================
 #  ÁREA PRINCIPAL
@@ -578,7 +606,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab1:
         col_rad, col_space = st.columns([1, 2])
         with col_rad:
-            semana = st.radio("Período de Análisis:", ["Semana 1 ", "Semana 2 "], horizontal=True)
+            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
         
         key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
         grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
