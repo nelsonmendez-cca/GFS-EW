@@ -6,6 +6,7 @@ Interfaz Interactiva con Streamlit - El Salvador
 • Carga directa y mapeo estricto de las 25 estaciones meteorológicas oficiales.
 • Colores personalizados para el perfil térmico diario (#f57046, #b7ee40, #ffffff).
 • Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
+• Manejo robusto de datos faltantes en el ensamble diario.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -156,7 +157,6 @@ def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
             "lon": float(st_item["lon"])
         }
 
-    # Puntos sintéticos en el borde para asegurar suavizado de interpolación raster
     min_lon, min_lat, max_lon, max_lat = gdf.total_bounds
     lons_ext = np.linspace(min_lon - buffer_deg, max_lon + buffer_deg, 6)
     lats_ext = np.linspace(min_lat - buffer_deg, max_lat + buffer_deg, 6)
@@ -373,7 +373,6 @@ def ejecutar_procesamiento():
 
     df_raw_all = pd.concat(dfs_modelos, ignore_index=True)
     
-    # Filtro estricto: excluir puntos de borde sintetizados para el reporte tabular
     df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")].copy()
     st.session_state['df_raw_all'] = df_puntos_reales
 
@@ -461,37 +460,43 @@ def render_graficos_promedio():
     piv_tmin = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_min").reset_index()
     piv_tmean = df_prom_diario.pivot(index="date", columns="modelo", values="temperature_2m_mean").reset_index()
 
-    piv_rain["Ensamble"] = (piv_rain["GFS"] + piv_rain["ECMWF"]) / 2.0
-    piv_tmax["Ensamble"] = (piv_tmax["GFS"] + piv_tmax["ECMWF"]) / 2.0
-    piv_tmin["Ensamble"] = (piv_tmin["GFS"] + piv_tmin["ECMWF"]) / 2.0
-    piv_tmean["Ensamble"] = (piv_tmean["GFS"] + piv_tmean["ECMWF"]) / 2.0
+    # Cálculo del ensamble tolerante a valores faltantes (si falta un modelo, toma el disponible)
+    cols_modelos = [m for m in ["GFS", "ECMWF"] if m in piv_rain.columns]
+    piv_rain["Ensamble"] = piv_rain[cols_modelos].mean(axis=1)
+    piv_tmax["Ensamble"] = piv_tmax[cols_modelos].mean(axis=1)
+    piv_tmin["Ensamble"] = piv_tmin[cols_modelos].mean(axis=1)
+    piv_tmean["Ensamble"] = piv_tmean[cols_modelos].mean(axis=1)
 
     # 1. Precipitación Promedio
     st.markdown("#### 🌧️ Precipitación Promedio Diaria (mm)")
     fig_rain = go.Figure()
-    fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["ECMWF"], name="ECMWF (Europeo)", marker_color="#1f77b4"))
-    fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["GFS"], name="GFS (EE.UU.)", marker_color="#ff7f0e"))
+    if "ECMWF" in piv_rain.columns:
+        fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["ECMWF"], name="ECMWF (Europeo)", marker_color="#1f77b4"))
+    if "GFS" in piv_rain.columns:
+        fig_rain.add_trace(go.Bar(x=piv_rain["date"], y=piv_rain["GFS"], name="GFS (EE.UU.)", marker_color="#ff7f0e"))
     fig_rain.add_trace(go.Scatter(x=piv_rain["date"], y=piv_rain["Ensamble"], name="Ensamble Consolidado", mode="lines+markers", line=dict(color="#2ca02c", width=3, dash="dot")))
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico ECMWF & GFS (#f57046, #b7ee40, #eee152)
+    # 2. Perfil Térmico ECMWF & GFS (#f57046, #b7ee40, #ffffff)
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.markdown("#### 🇪🇺 Modelo Europeo (ECMWF)")
+        st.markdown("#### Modelo Europeo (ECMWF)")
         fig_eur = go.Figure()
-        fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
-        fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
-        fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#eee152", width=2.5)))
+        if "ECMWF" in piv_tmax.columns:
+            fig_eur.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["ECMWF"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
+            fig_eur.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["ECMWF"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
+            fig_eur.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["ECMWF"], name="T. Mínima", mode="lines+markers", line=dict(color="#ffffff", width=2.5)))
         fig_eur.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_eur, use_container_width=True)
 
     with col_g2:
-        st.markdown("#### 🇺🇸 Modelo GFS")
+        st.markdown("#### Modelo GFS")
         fig_gfs = go.Figure()
-        fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
-        fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
-        fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#eee152", width=2.5)))
+        if "GFS" in piv_tmax.columns:
+            fig_gfs.add_trace(go.Scatter(x=piv_tmax["date"], y=piv_tmax["GFS"], name="T. Máxima", mode="lines+markers", line=dict(color="#f57046", width=2.5)))
+            fig_gfs.add_trace(go.Scatter(x=piv_tmean["date"], y=piv_tmean["GFS"], name="T. Media", mode="lines+markers", line=dict(color="#b7ee40", width=2.5, dash="dash")))
+            fig_gfs.add_trace(go.Scatter(x=piv_tmin["date"], y=piv_tmin["GFS"], name="T. Mínima", mode="lines+markers", line=dict(color="#ffffff", width=2.5)))
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
@@ -500,12 +505,15 @@ def render_graficos_promedio():
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    with st.expander("📋 Ver Matriz por Estaciones (Formato Tabla)", expanded=True):
+    with st.expander("📋 Ver Matrices por Estaciones ", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
-        st.dataframe(df_matriz_precip, use_container_width=True, height=300)
+        st.dataframe(df_matriz_precip, use_container_width=True, height=250)
 
         st.markdown("##### 🌡️ Temperatura Máxima por Estación (°C)")
         st.dataframe(df_matriz_tmax, use_container_width=True, height=250)
+
+        st.markdown("##### ❄️ Temperatura Mínima por Estación (°C)")
+        st.dataframe(df_matriz_tmin, use_container_width=True, height=250)
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -555,7 +563,7 @@ if 'excel_buffer' in st.session_state:
     )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (GFS & ECMWF)")
+st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API ")
 
 # =====================
 #  ÁREA PRINCIPAL
@@ -570,7 +578,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab1:
         col_rad, col_space = st.columns([1, 2])
         with col_rad:
-            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
+            semana = st.radio("Período de Análisis:", ["Semana 1 ", "Semana 2 "], horizontal=True)
         
         key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
         grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
