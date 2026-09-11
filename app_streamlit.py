@@ -3,14 +3,9 @@
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
 • Escala de temperatura fija personalizada (8°C a 40°C exactos).
-• Carga directa de estaciones meteorológicas oficiales en tablas y gráficos.
-• Colores personalizados para el perfil térmico diario (#f57046, #b7ee40, #eee152).
-• Conservación intacta de la paleta y rangos de precipitación.
+• Carga directa y mapeo estricto de las 25 estaciones meteorológicas oficiales.
+• Colores personalizados para el perfil térmico diario (#f57046, #b7ee40, #ffffff).
 • Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
-• Buffer de Bounding Box para eliminar artefactos en bordes.
-• Elevación y Relieve Real (DEM) limitado al país.
-• Generación de Collage de 16 Días (4x4).
-• Descarga de capas GeoTIFF empacadas en ZIP.
 """
 
 import json, os, sys, time, io, zipfile, datetime
@@ -90,7 +85,7 @@ ESTACIONES_JSON = {
   ]
 }
 
-# --- PALETA DE COLOR PRECIPITACIÓN (SIN CAMBIOS) ---
+# --- PALETA DE COLOR PRECIPITACIÓN ---
 colores_precip_rgb = np.array([
     [255, 255, 255], [230, 245, 255], [190, 225, 255], [140, 205, 255],
     [90,  170, 255], [50,  120, 255], [80,  80,  255], [120, 60,  255],
@@ -117,29 +112,20 @@ NORM_TEMP = mcolors.BoundaryNorm(STEPS_TEMP, ncolors=len(COLORES_TEMP), extend='
 
 ESTILOS_MAPA = {
     "precipitation_sum": {
-        "cmap": CMAP_PRECIP,
-        "norm_diario": NORM_PRECIP_DIARIO,
-        "norm_semanal": NORM_PRECIP_SEMANAL,
-        "label_diario": "Precipitación (mm)",
-        "label_semanal": "Precipitación Acumulada (mm)",
-        "title": "Precipitación Pronosticada",
-        "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
-        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250],
-        "extend": "max"
+        "cmap": CMAP_PRECIP, "norm_diario": NORM_PRECIP_DIARIO, "norm_semanal": NORM_PRECIP_SEMANAL,
+        "label_diario": "Precipitación (mm)", "label_semanal": "Precipitación Acumulada (mm)",
+        "title": "Precipitación Pronosticada", "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
+        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max"
     },
     "temperature_2m_max": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Máx Promedio (°C)",
-        "title": "Temperatura Máxima",
-        "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
-        "extend": "neither"
+        "title": "Temperatura Máxima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
     },
     "temperature_2m_min": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Mín Promedio (°C)",
-        "title": "Temperatura Mínima",
-        "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
-        "extend": "neither"
+        "title": "Temperatura Mínima", "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP, "extend": "neither"
     }
 }
 
@@ -152,8 +138,7 @@ session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 def limpiar_fecha_str(fecha_val: Any) -> str:
     return str(fecha_val).split()[0].split("T")[0]
 
-@st.cache_data
-def cargar_estaciones_desde_dict(ruta_geojson: str, buffer_deg: float) -> tuple:
+def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
     if not os.path.exists(ruta_geojson):
         st.error(f"❌ No se encontró el archivo GeoJSON: {ruta_geojson}")
         return {}, None
@@ -171,6 +156,7 @@ def cargar_estaciones_desde_dict(ruta_geojson: str, buffer_deg: float) -> tuple:
             "lon": float(st_item["lon"])
         }
 
+    # Puntos sintéticos en el borde para asegurar suavizado de interpolación raster
     min_lon, min_lat, max_lon, max_lat = gdf.total_bounds
     lons_ext = np.linspace(min_lon - buffer_deg, max_lon + buffer_deg, 6)
     lats_ext = np.linspace(min_lat - buffer_deg, max_lat + buffer_deg, 6)
@@ -211,36 +197,6 @@ def parse_batch_response(results: List[Dict[str, Any]], batch_meta: List[Dict[st
         df.insert(0, "ID", meta["id"])
         dfs.append(df)
     return dfs
-
-def obtener_hillshade_real_recortado(grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> np.ndarray:
-    try:
-        lons, lats = grid_lon_mesh.flatten()[::15], grid_lat_mesh.flatten()[::15]
-        url = "https://api.open-elevation.com/api/v1/lookup"
-        locations = [{"latitude": round(lat, 4), "longitude": round(lon, 4)} for lat, lon in zip(lats, lons)]
-        
-        elevations = []
-        for i in range(0, len(locations), 100):
-            res = requests.post(url, json={"locations": locations[i:i+100]}, timeout=15)
-            if res.status_code == 200: elevations.extend([r["elevation"] for r in res.json()["results"]])
-            else: break
-
-        if len(elevations) == len(lons):
-            points = np.column_stack((lons, lats))
-            z_grid = griddata(points, elevations, (grid_lon_mesh, grid_lat_mesh), method='cubic')
-            z_grid = gaussian_filter(np.nan_to_num(z_grid, nan=0.0), sigma=1.5)
-            
-            dy, dx = np.gradient(z_grid)
-            slope = np.pi/2.0 - np.arctan(np.sqrt(dx*dx + dy*dy))
-            aspect = np.arctan2(-dy, dx)
-            shaded = np.sin(np.pi/4.0) * np.sin(slope) + np.cos(np.pi/4.0) * np.cos(slope) * np.cos(3.0*np.pi/4.0 - aspect)
-            shaded_norm = (shaded - shaded.min()) / (shaded.max() - shaded.min() + 1e-5)
-            
-            geometrias = [geom for geom in gdf_boundary.geometry]
-            hill_recortado, _, _ = recortar_y_guardar_raster(shaded_norm, "hillshade_temp", transform, height, width, geometrias)
-            return hill_recortado
-    except Exception:
-        pass
-    return None
 
 def interpolar_suave(points: np.ndarray, values: np.ndarray, grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, es_precip: bool = False) -> np.ndarray:
     try:
@@ -290,7 +246,7 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
 
     return out_image[0], extent, out_meta
 
-def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, hillshade: np.ndarray, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
+def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=200)
     ax.set_facecolor('white')
     
@@ -298,10 +254,6 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
-
-    if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', alpha=0.25, origin='upper', zorder=3)
-    
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, linestyle='-', zorder=4)
 
     label_cbar = estilo.get("label_semanal", var)
@@ -320,7 +272,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     plt.tight_layout()
     return fig
 
-def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gdf_boundary: gpd.GeoDataFrame, hillshade: np.ndarray, var: str) -> plt.Figure:
+def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gdf_boundary: gpd.GeoDataFrame, var: str) -> plt.Figure:
     fechas = sorted(list(raster_dict.keys()))[:16]
     fig, axes = plt.subplots(4, 4, figsize=(16, 11), dpi=150)
     axes = axes.flatten()
@@ -335,10 +287,6 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
         
         raster = raster_dict[fecha]
         last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', zorder=2)
-        
-        if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', alpha=0.2, origin='upper', zorder=3)
-
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#222222', linewidth=0.4, zorder=4)
 
         f_obj = datetime.datetime.strptime(limpiar_fecha_str(fecha), "%Y-%m-%d")
@@ -373,7 +321,7 @@ def crear_zip_tiffs(var_seleccionada: str) -> bytes:
     return buffer_zip.getvalue()
 
 def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulado: bool = True) -> pd.DataFrame:
-    """ Genera la matriz pivote Estación vs Fechas con formato idéntico al oficial. """
+    """ Genera la matriz pivote Estación vs Fechas usando los nombres reales. """
     df_ens = df_raw.groupby(["ID", "NAME", "date"])[variable].mean().reset_index()
     piv = df_ens.pivot(index=["ID", "NAME"], columns="date", values=variable).reset_index()
     
@@ -400,14 +348,14 @@ def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulad
 #  LÓGICA PRINCIPAL
 # =====================
 def ejecutar_procesamiento():
-    estaciones, gdf_boundary = cargar_estaciones_desde_dict(ARCHIVO_ESTACIONES, BUFFER_GRADOS)
+    estaciones, gdf_boundary = cargar_estaciones_y_border(ARCHIVO_ESTACIONES, BUFFER_GRADOS)
     if not estaciones: return
 
     os.makedirs(CARPETA_TIFFS, exist_ok=True)
     items_estaciones = list(estaciones.items())
     dfs_modelos = []
 
-    progreso = st.sidebar.progress(0, text="Descargando malla de datos...")
+    progreso = st.sidebar.progress(0, text="Descargando datos por estación...")
 
     for idx_mod, (model_key, alias) in enumerate(MODELOS.items()):
         progreso.progress(10 + idx_mod * 20, text=f"Descargando {alias}...")
@@ -424,7 +372,9 @@ def ejecutar_procesamiento():
                 st.error(f"Error descargando {alias}: {e}")
 
     df_raw_all = pd.concat(dfs_modelos, ignore_index=True)
-    df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")]
+    
+    # Filtro estricto: excluir puntos de borde sintetizados para el reporte tabular
+    df_puntos_reales = df_raw_all[~df_raw_all["ID"].astype(str).str.startswith("BUFFER_")].copy()
     st.session_state['df_raw_all'] = df_puntos_reales
 
     df_ensamble = df_raw_all.groupby(["ID", "NAME", "lat", "lon", "date"])[DAILY_VARS].mean().reset_index()
@@ -448,8 +398,6 @@ def ejecutar_procesamiento():
 
     fechas_s1 = [f for f in fechas_disponibles if d_manana <= f <= d_s1_end]
     fechas_s2 = [f for f in fechas_disponibles if d_s2_start <= f <= d_s2_end]
-
-    hillshade_real = obtener_hillshade_real_recortado(grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
 
     st.session_state['datos_procesados'] = {}
 
@@ -490,7 +438,6 @@ def ejecutar_procesamiento():
             "extent": extent_final,
             "fechas_s1": fechas_s1,
             "fechas_s2": fechas_s2,
-            "hillshade": hillshade_real,
             "gdf": gdf_boundary
         }
 
@@ -528,7 +475,7 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico ECMWF & GFS con los colores requeridos (#f57046, #b7ee40, #eee152)
+    # 2. Perfil Térmico ECMWF & GFS (#f57046, #b7ee40, #eee152)
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### 🇪🇺 Modelo Europeo (ECMWF)")
@@ -548,12 +495,11 @@ def render_graficos_promedio():
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # Construir matrices por estación
+    # Construir matrices por estación usando los nombres de ESTACIONES_JSON
     df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    # Vista previa en pantalla
     with st.expander("📋 Ver Matriz por Estaciones (Formato Tabla)", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
         st.dataframe(df_matriz_precip, use_container_width=True, height=300)
@@ -561,7 +507,6 @@ def render_graficos_promedio():
         st.markdown("##### 🌡️ Temperatura Máxima por Estación (°C)")
         st.dataframe(df_matriz_tmax, use_container_width=True, height=250)
 
-    # Descarga Excel con formato multicapa en la barra lateral
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df_matriz_precip.to_excel(writer, sheet_name='Precipitacion_Estaciones', index=False)
@@ -579,7 +524,6 @@ st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Cargar / Actualizar Datos", type="primary", use_container_width=True):
     ejecutar_procesamiento()
 
-# Selector de Variable
 var_seleccionada = None
 if 'datos_procesados' in st.session_state:
     st.sidebar.markdown("---")
@@ -590,7 +534,6 @@ if 'datos_procesados' in st.session_state:
         format_func=lambda x: ESTILOS_MAPA[x]["title"]
     )
 
-    # Sección de Exportación GIS (ZIP GeoTIFFs)
     st.sidebar.markdown("---")
     st.sidebar.subheader("💾 Exportar GIS")
     bytes_zip = crear_zip_tiffs(var_seleccionada)
@@ -602,7 +545,6 @@ if 'datos_procesados' in st.session_state:
         use_container_width=True
     )
 
-# Descarga de Excel si los gráficos fueron generados
 if 'excel_buffer' in st.session_state:
     st.sidebar.download_button(
         label="📥 Matriz Estaciones (.XLSX)",
@@ -639,7 +581,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
             f_end_str  = datetime.datetime.strptime(limpiar_fecha_str(grupo_fechas[-1]), "%Y-%m-%d").strftime("%d de %B de %Y")
 
             fig = generar_figura_semanal(
-                raster_resumen, datos_var["extent"], datos_var["gdf"], datos_var["hillshade"],
+                raster_resumen, datos_var["extent"], datos_var["gdf"],
                 var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
             )
             st.pyplot(fig, use_container_width=True)
@@ -647,7 +589,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab2:
         st.subheader("Pronóstico Diario Continuo (16 Días)")
         fig_collage = generar_collage_16_dias(
-            datos_var["raster_dict"], datos_var["extent"], datos_var["gdf"], datos_var["hillshade"], var_seleccionada
+            datos_var["raster_dict"], datos_var["extent"], datos_var["gdf"], var_seleccionada
         )
         st.pyplot(fig_collage, use_container_width=True)
 
