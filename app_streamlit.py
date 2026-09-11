@@ -2,7 +2,8 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Escala de temperatura fija personalizada (8°C a 40°C).
+• Escala de temperatura fija personalizada (8°C a 40°C exactos).
+• Conservación intacta de la paleta y rangos de precipitación.
 • Generación de matrices por Estaciones (Formato Excel exacto con promedios y totales).
 • Buffer de Bounding Box para eliminar artefactos en bordes.
 • Elevación y Relieve Real (DEM) limitado al país.
@@ -56,7 +57,7 @@ BATCH_SIZE = 50
 RESOLUCION_TIFF = 0.008
 BUFFER_GRADOS = 0.35 
 
-# --- PALETA DE COLOR PRECIPITACIÓN ---
+# --- PALETA DE COLOR PRECIPITACIÓN (SIN CAMBIOS) ---
 colores_precip_rgb = np.array([
     [255, 255, 255], [230, 245, 255], [190, 225, 255], [140, 205, 255],
     [90,  170, 255], [50,  120, 255], [80,  80,  255], [120, 60,  255],
@@ -70,7 +71,7 @@ NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colo
 BOUNDS_PRECIP_SEMANAL = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250]
 NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
 
-# --- PALETA DE COLOR TEMPERATURA FIJA ---
+# --- PALETA DE COLOR TEMPERATURA FIJA (CORREGIDA CON EXTEND='NEITHER') ---
 STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
 COLORES_TEMP = [
     "#1922FB", "#3B56FC", "#4780FC", "#43A5FD", "#28CCFE", "#00F0FE",
@@ -79,7 +80,7 @@ COLORES_TEMP = [
 ]
 
 CMAP_TEMP = mcolors.ListedColormap(COLORES_TEMP)
-NORM_TEMP = mcolors.BoundaryNorm(STEPS_TEMP, ncolors=len(COLORES_TEMP), extend='both')
+NORM_TEMP = mcolors.BoundaryNorm(STEPS_TEMP, ncolors=len(COLORES_TEMP), extend='neither')
 
 ESTILOS_MAPA = {
     "precipitation_sum": {
@@ -91,18 +92,21 @@ ESTILOS_MAPA = {
         "title": "Precipitación Pronosticada",
         "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
         "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250],
+        "extend": "max"
     },
     "temperature_2m_max": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Máx Promedio (°C)",
         "title": "Temperatura Máxima",
         "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
+        "extend": "neither"
     },
     "temperature_2m_min": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
         "label_diario": "Temperatura (°C)", "label_semanal": "Temp. Mín Promedio (°C)",
         "title": "Temperatura Mínima",
         "ticks_diario": STEPS_TEMP, "ticks_semanal": STEPS_TEMP,
+        "extend": "neither"
     }
 }
 
@@ -285,8 +289,10 @@ def generar_figura_semanal(raster_resumen: np.ndarray, extent: List, gdf_boundar
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, linestyle='-', zorder=4)
 
     label_cbar = estilo.get("label_semanal", var)
+    ext_val = estilo.get("extend", "neither")
+
     if estilo.get("ticks_semanal"):
-        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend='both' if 'temperature' in var else 'max')
+        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend=ext_val)
     else:
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
@@ -331,8 +337,9 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], extent: List, gd
     
     if last_im:
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
+        ext_val = estilo.get("extend", "neither")
         if estilo.get("ticks_diario"):
-            fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend='both' if 'temperature' in var else 'max')
+            fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val)
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
 
@@ -350,7 +357,7 @@ def crear_zip_tiffs(var_seleccionada: str) -> bytes:
     return buffer_zip.getvalue()
 
 def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulado: bool = True) -> pd.DataFrame:
-    """ Genera la matriz pivote Estación vs Fechas con formato identico a la imagen. """
+    """ Genera la matriz pivote Estación vs Fechas con formato idéntico al de la imagen. """
     df_ens = df_raw.groupby(["ID", "NAME", "date"])[variable].mean().reset_index()
     piv = df_ens.pivot(index=["ID", "NAME"], columns="date", values=variable).reset_index()
     
@@ -367,10 +374,7 @@ def construir_matriz_estaciones(df_raw: pd.DataFrame, variable: str, es_acumulad
     for f in fechas_cols:
         row_prom[f] = round(piv[f].mean(), 1)
     
-    if es_acumulado:
-        row_prom["TOTAL"] = round(piv["TOTAL"].mean(), 1)
-    else:
-        row_prom["TOTAL"] = round(piv["TOTAL"].mean(), 1)
+    row_prom["TOTAL"] = round(piv["TOTAL"].mean(), 1)
 
     df_final = pd.concat([piv, pd.DataFrame([row_prom])], ignore_index=True)
     df_final = df_final.rename(columns={"ID": "Estacion", "NAME": "Estacion_Nombre"})
@@ -528,7 +532,7 @@ def render_graficos_promedio():
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # Construir matrices por estación estilo foto
+    # Construir matrices por estación
     df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
