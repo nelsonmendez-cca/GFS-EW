@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Interfaz Interactiva con Streamlit - El Salvador
+---------------------------------------------------------------------------------------
+• Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
+• Corrección de alineación del Hillshade (sombras calzadas con la frontera).
+• Fechas 100% en español sin dependencia de locale.
+• Perfil térmico ajustado (#5593ff en T. Mínima) y tabla de T. Media por estación.
 """
 
-import json, os, sys, time, io, zipfile, datetime
+import json, os, sys, time, io, zipfile, datetime, gc
 from typing import Dict, Any, List
 from datetime import date, timedelta
 
@@ -42,16 +47,20 @@ MODELOS = {"gfs_global": "GFS", "ecmwf_ifs025": "ECMWF"}
 DAILY_VARS = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 VARIABLES_EXPORTAR = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 
-# 16 Días contados a partir de hoy
 START_DATE = date.today().strftime("%Y-%m-%d")
 END_DATE = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
 
 TIMEOUT_S = 60
 BATCH_SIZE = 50
-RESOLUCION_TIFF = 0.005 # Mayor resolución espacial para suavidad del relieve
+RESOLUCION_TIFF = 0.005  # Definición máxima mantenida
 BUFFER_GRADOS = 0.35 
 
-# LISTA OFICIAL DE ESTACIONES METEOROLÓGICAS (Incluye elevaciones aproximadas en msnm)
+MESES_ES = {
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+}
+
 ESTACIONES_JSON = {
   "stations": [
     {"id": "A15", "name": "GUIJA", "lat": 14.2283888888889, "lon": -89.4690833333333, "elevation": 430},
@@ -82,7 +91,6 @@ ESTACIONES_JSON = {
   ]
 }
 
-# --- PALETA DE COLOR PRECIPITACIÓN ---
 colores_precip_rgb = np.array([
     [255, 255, 255], [230, 245, 255], [190, 225, 255], [140, 205, 255],
     [90,  170, 255], [50,  120, 255], [80,  80,  255], [120, 60,  255],
@@ -96,7 +104,6 @@ NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colo
 BOUNDS_PRECIP_SEMANAL = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250]
 NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
 
-# --- PALETA DE COLOR TEMPERATURA FIJA ---
 STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
 COLORES_TEMP = [
     "#1922FB", "#3B56FC", "#4780FC", "#43A5FD", "#28CCFE", "#00F0FE",
@@ -132,8 +139,13 @@ session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 # =====================
 #  FUNCIONES AUXILIARES
 # =====================
-def limpiar_fecha_str(fecha_val: Any) -> str:
-    return str(fecha_val).split()[0].split("T")[0]
+def fecha_a_espanol(fecha_str: str, con_ano: bool = True) -> str:
+    """ ConvierteYYYY-MM-DD a formato español exacto """
+    dt = datetime.datetime.strptime(str(fecha_str).split()[0], "%Y-%m-%d")
+    mes_nombre = MESES_ES[dt.month]
+    if con_ano:
+        return f"{dt.day} de {mes_nombre} de {dt.year}"
+    return f"{dt.day} de {mes_nombre}"
 
 def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
     if not os.path.exists(ruta_geojson):
@@ -167,8 +179,40 @@ def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
 
     return estaciones, gdf
 
-def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> np.ndarray:
-    """ Genera el sombreado topográfico (Hillshade DEM) recortado exactamente a la frontera nacional. """
+def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform, height: int, width: int, geometrias: list) -> tuple:
+    grid_z_flipped = np.flipud(grid_z).astype(np.float32)
+    ruta_tif = os.path.join(CARPETA_TIFFS, f"{nombre_archivo}.tif")
+
+    meta = {
+        'driver': 'GTiff', 'height': height, 'width': width, 'count': 1,
+        'dtype': 'float32', 'crs': 'EPSG:4326', 'transform': transform, 'nodata': np.nan
+    }
+
+    with rasterio.open(ruta_tif, 'w', **meta) as dst:
+        dst.write(grid_z_flipped, 1)
+
+    with rasterio.open(ruta_tif, 'r+') as src:
+        out_image, out_transform = mask(src, geometrias, crop=True, nodata=np.nan)
+        out_meta = src.meta.copy()
+        out_meta.update({
+            "height": out_image.shape[1], "width": out_image.shape[2],
+            "transform": out_transform, "nodata": np.nan
+        })
+
+    with rasterio.open(ruta_tif, 'w', **out_meta) as dst:
+        dst.write(out_image)
+
+    # Cálculo correcto y consistente del Bounding Box (Extent) de la imagen recortada
+    xmin = out_transform[2]
+    ymax = out_transform[5]
+    xmax = xmin + out_transform[0] * out_image.shape[2]
+    ymin = ymax + out_transform[4] * out_image.shape[1]
+    extent = [xmin, xmax, ymin, ymax]
+
+    return out_image[0], extent, out_meta
+
+def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> tuple:
+    """ Genera el sombreado topográfico alineado perfectamente con el recorte vectorial. """
     points = np.array([[meta["lon"], meta["lat"]] for meta in estaciones.values()])
     elevations = np.array([meta["elevation"] for meta in estaciones.values()])
 
@@ -179,24 +223,13 @@ def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray,
     hillshade_raw = ls.hillshade(dem_grid, vert_exag=3.0)
 
     geometrias = [geom for geom in gdf_boundary.geometry]
-    hillshade_flipped = np.flipud(hillshade_raw).astype(np.float32)
-
-    ruta_temp = os.path.join(CARPETA_TIFFS, "temp_hillshade.tif")
-    meta_tif = {
-        'driver': 'GTiff', 'height': height, 'width': width, 'count': 1,
-        'dtype': 'float32', 'crs': 'EPSG:4326', 'transform': transform, 'nodata': np.nan
-    }
-
-    with rasterio.open(ruta_temp, 'w', **meta_tif) as dst:
-        dst.write(hillshade_flipped, 1)
-
-    with rasterio.open(ruta_temp, 'r+') as src:
-        out_image, _ = mask(src, geometrias, crop=False, nodata=np.nan)
-
-    if os.path.exists(ruta_temp):
-        os.remove(ruta_temp)
-
-    return out_image[0]
+    
+    # Se pasa por el mismo recorte exacto para alinear coordenadas
+    hillshade_crop, extent_hs, _ = recortar_y_guardar_raster(
+        hillshade_raw, "dem_hillshade_base", transform, height, width, geometrias
+    )
+    
+    return hillshade_crop, extent_hs
 
 def fetch_openmeteo_batch(lats: List[float], lons: List[float], modelo: str) -> List[Dict[str, Any]]:
     params = {
@@ -215,7 +248,7 @@ def parse_batch_response(results: List[Dict[str, Any]], batch_meta: List[Dict[st
         daily = payload.get("daily", {})
         times = daily.get("time", [])
         if not times: continue
-        df = pd.DataFrame({"date": [limpiar_fecha_str(t) for t in times]})
+        df = pd.DataFrame({"date": [str(t).split("T")[0] for t in times]})
         for k, v in daily.items():
             if k != "time" and isinstance(v, list) and len(v) == len(df): df[k] = v
         df.insert(0, "modelo", alias_modelo)
@@ -242,38 +275,6 @@ def interpolar_suave(points: np.ndarray, values: np.ndarray, grid_lon_mesh: np.n
     if es_precip: grid_z = np.clip(grid_z, a_min=0.0, a_max=None)
     return grid_z
 
-def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform, height: int, width: int, geometrias: list) -> tuple:
-    grid_z_flipped = np.flipud(grid_z).astype(np.float32)
-    ruta_tif = os.path.join(CARPETA_TIFFS, f"{nombre_archivo}.tif")
-
-    meta = {
-        'driver': 'GTiff', 'height': height, 'width': width, 'count': 1,
-        'dtype': 'float32', 'crs': 'EPSG:4326', 'transform': transform, 'nodata': np.nan
-    }
-
-    with rasterio.open(ruta_tif, 'w', **meta) as dst:
-        dst.write(grid_z_flipped, 1)
-
-    with rasterio.open(ruta_tif, 'r+') as src:
-        out_image, out_transform = mask(src, geometrias, crop=True, nodata=np.nan)
-        out_meta = src.meta.copy()
-        out_meta.update({
-            "height": out_image.shape[1], "width": out_image.shape[2],
-            "transform": out_transform, "nodata": np.nan
-        })
-
-    with rasterio.open(ruta_tif, 'w', **out_meta) as dst:
-        dst.write(out_image)
-
-    extent = [
-        out_transform[2],
-        out_transform[2] + out_transform[0] * out_image.shape[2],
-        out_transform[5] + out_transform[4] * out_image.shape[1],
-        out_transform[5]
-    ]
-
-    return out_image[0], extent, out_meta
-
 def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, extent: List, gdf_boundary: gpd.GeoDataFrame, var: str, titulo_semana: str, f_inicio: str, f_fin: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(10, 5.5), dpi=200)
     ax.set_facecolor('#d9ebf9')
@@ -282,7 +283,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.5, zorder=1)
 
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
@@ -296,7 +297,12 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
     cbar.ax.tick_params(labelsize=9)
-    plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_inicio} al {f_fin}", fontsize=11, fontweight='bold', pad=10)
+    
+    # Fechas formateadas estrictamente a Español
+    f_init_es = fecha_a_espanol(f_inicio, con_ano=False)
+    f_fin_es = fecha_a_espanol(f_fin, con_ano=True)
+
+    plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_init_es} al {f_fin_es}", fontsize=11, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
     plt.grid(True, linestyle=':', alpha=0.2)
@@ -319,13 +325,13 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         raster = raster_dict[fecha]
         
         if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.55, zorder=1)
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.5, zorder=1)
 
         last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
-        f_obj = datetime.datetime.strptime(limpiar_fecha_str(fecha), "%Y-%m-%d")
-        ax.set_title(f_obj.strftime("%d/%m/%Y"), fontsize=9, fontweight='bold')
+        dt_fecha = datetime.datetime.strptime(str(fecha).split()[0], "%Y-%m-%d")
+        ax.set_title(dt_fecha.strftime("%d/%m/%Y"), fontsize=9, fontweight='bold')
         ax.set_xticks([])
         ax.set_yticks([])
 
@@ -423,7 +429,8 @@ def ejecutar_procesamiento():
     width, height = len(grid_lon), len(grid_lat)
     transform = from_bounds(min_lon - 0.1, min_lat - 0.1, max_lon + 0.1, max_lat + 0.1, width, height)
 
-    hillshade_dem = generar_dem_hillshade(estaciones, grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
+    # Hillshade perfectamente alineado
+    hillshade_dem, extent_hs = generar_dem_hillshade(estaciones, grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
 
     fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
 
@@ -441,7 +448,6 @@ def ejecutar_procesamiento():
         progreso.progress(50 + idx_var * 15, text=f"Generando rasters de: {var}")
         
         raster_diario_dict = {}
-        extent_final = None
 
         for fecha in fechas_disponibles:
             df_fecha = df_ensamble[df_ensamble['date'] == fecha]
@@ -454,8 +460,8 @@ def ejecutar_procesamiento():
             points, values = df_fecha[['lon', 'lat']].values, df_fecha[var].values
 
             grid_z = interpolar_suave(points, values, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
-            fecha_str = limpiar_fecha_str(fecha)
-            raster_dia, extent_final, _ = recortar_y_guardar_raster(
+            fecha_str = str(fecha).split("T")[0]
+            raster_dia, _, _ = recortar_y_guardar_raster(
                 grid_z, f"pronostico_ENSAMBLE_{var}_{fecha_str}", transform, height, width, geometrias
             )
             raster_diario_dict[fecha] = raster_dia
@@ -469,7 +475,7 @@ def ejecutar_procesamiento():
                 points_sem, values_sem = df_sem_agg[['lon', 'lat']].values, df_sem_agg[var].values
                 grid_z_sem = interpolar_suave(points_sem, values_sem, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
                 
-                raster_sem, extent_final, _ = recortar_y_guardar_raster(
+                raster_sem, _, _ = recortar_y_guardar_raster(
                     grid_z_sem, f"pronostico_ENSAMBLE_{var}_{nom_sem}", transform, height, width, geometrias
                 )
                 raster_semanal_dict[nom_sem] = raster_sem
@@ -478,7 +484,7 @@ def ejecutar_procesamiento():
             "raster_dict": raster_diario_dict,
             "raster_semanal": raster_semanal_dict,
             "hillshade": hillshade_dem,
-            "extent": extent_final,
+            "extent": extent_hs,
             "fechas_s1": fechas_s1,
             "fechas_s2": fechas_s2,
             "gdf": gdf_boundary
@@ -521,7 +527,7 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico (Color azul #5593ff en T. Mínima)
+    # 2. Perfil Térmico (Azul #5593ff en T. Mínima)
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### Modelo Europeo (ECMWF)")
@@ -543,16 +549,14 @@ def render_graficos_promedio():
         fig_gfs.update_layout(xaxis_title="Fecha", yaxis_title="Temperatura (°C)", hovermode="x unified", height=320, margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig_gfs, use_container_width=True)
 
-    # Cálculo de la columna T. Media en raw data
     df_raw["temperature_2m_mean"] = (df_raw["temperature_2m_max"] + df_raw["temperature_2m_min"]) / 2.0
 
-    # Construcción de matrices por estación
     df_matriz_precip = construir_matriz_estaciones(df_raw, "precipitation_sum", es_acumulado=True)
     df_matriz_tmax = construir_matriz_estaciones(df_raw, "temperature_2m_max", es_acumulado=False)
     df_matriz_tmean = construir_matriz_estaciones(df_raw, "temperature_2m_mean", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    with st.expander("📋 Ver Matrices por Estaciones (Pronostico)", expanded=True):
+    with st.expander("📋 Ver Matrices por Estaciones Convencionales", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
         st.dataframe(df_matriz_precip, use_container_width=True, height=220)
 
@@ -565,7 +569,6 @@ def render_graficos_promedio():
         st.markdown("##### ❄️ Temperatura Mínima por Estación (°C)")
         st.dataframe(df_matriz_tmin, use_container_width=True, height=220)
 
-    # Exportación a Excel con las 4 pestañas
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df_matriz_precip.to_excel(writer, sheet_name='Precipitacion_Estaciones', index=False)
@@ -576,7 +579,7 @@ def render_graficos_promedio():
     st.session_state['excel_buffer'] = buffer.getvalue()
 
 # =====================
-#  BARRA LATERAL (SIDEBAR)
+#  BARRA LATERAL
 # =====================
 st.sidebar.title("⚙️ Panel de Control")
 
@@ -615,7 +618,7 @@ if 'excel_buffer' in st.session_state:
     )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 **El Salvador CCA Visor**\nFuente: Open-Meteo API ")
+st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API ")
 
 # =====================
 #  ÁREA PRINCIPAL
@@ -637,21 +640,25 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
 
         if grupo_fechas and key_sem in datos_var.get("raster_semanal", {}):
             raster_resumen = datos_var["raster_semanal"][key_sem]
-            f_init_str = datetime.datetime.strptime(limpiar_fecha_str(grupo_fechas[0]), "%Y-%m-%d").strftime("%d de %B")
-            f_end_str  = datetime.datetime.strptime(limpiar_fecha_str(grupo_fechas[-1]), "%Y-%m-%d").strftime("%d de %B de %Y")
+            f_init_str = grupo_fechas[0]
+            f_end_str  = grupo_fechas[-1]
 
             fig = generar_figura_semanal(
                 raster_resumen, datos_var["hillshade"], datos_var["extent"], datos_var["gdf"],
                 var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
             )
             st.pyplot(fig, use_container_width=True)
+            plt.close(fig)  # Liberación explícita de RAM
+            gc.collect()
 
     with tab2:
-        st.subheader("Pronóstico Diario Continuo")
+        st.subheader("Pronóstico Diario")
         fig_collage = generar_collage_16_dias(
             datos_var["raster_dict"], datos_var["hillshade"], datos_var["extent"], datos_var["gdf"], var_seleccionada
         )
         st.pyplot(fig_collage, use_container_width=True)
+        plt.close(fig_collage)  # Liberación explícita de RAM
+        gc.collect()
 
 else:
     with tab1:
