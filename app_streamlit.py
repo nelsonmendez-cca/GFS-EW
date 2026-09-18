@@ -2,6 +2,7 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
+• Nueva escala de colores RGB de precipitación aplicada.
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
 • Corrección de alineación del Hillshade (sombras calzadas con la frontera).
 • Fechas 100% en español sin dependencia de locale.
@@ -91,6 +92,9 @@ ESTACIONES_JSON = {
   ]
 }
 
+# =====================
+#  NUEVA ESCALA RGB
+# =====================
 colores_precip_rgb = np.array([
     [255, 255, 255],  # #FFFFFF
     [218, 241, 255],  # #DAF1FF
@@ -148,7 +152,7 @@ session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 #  FUNCIONES AUXILIARES
 # =====================
 def fecha_a_espanol(fecha_str: str, con_ano: bool = True) -> str:
-    """ ConvierteYYYY-MM-DD a formato español exacto """
+    """ Convierte YYYY-MM-DD a formato español exacto """
     dt = datetime.datetime.strptime(str(fecha_str).split()[0], "%Y-%m-%d")
     mes_nombre = MESES_ES[dt.month]
     if con_ano:
@@ -210,7 +214,6 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
     with rasterio.open(ruta_tif, 'w', **out_meta) as dst:
         dst.write(out_image)
 
-    # Cálculo correcto y consistente del Bounding Box (Extent) de la imagen recortada
     xmin = out_transform[2]
     ymax = out_transform[5]
     xmax = xmin + out_transform[0] * out_image.shape[2]
@@ -220,7 +223,6 @@ def recortar_y_guardar_raster(grid_z: np.ndarray, nombre_archivo: str, transform
     return out_image[0], extent, out_meta
 
 def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, gdf_boundary: gpd.GeoDataFrame, transform, height: int, width: int) -> tuple:
-    """ Genera el sombreado topográfico alineado perfectamente con el recorte vectorial. """
     points = np.array([[meta["lon"], meta["lat"]] for meta in estaciones.values()])
     elevations = np.array([meta["elevation"] for meta in estaciones.values()])
 
@@ -232,7 +234,6 @@ def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray,
 
     geometrias = [geom for geom in gdf_boundary.geometry]
     
-    # Se pasa por el mismo recorte exacto para alinear coordenadas
     hillshade_crop, extent_hs, _ = recortar_y_guardar_raster(
         hillshade_raw, "dem_hillshade_base", transform, height, width, geometrias
     )
@@ -306,7 +307,6 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
 
     cbar.ax.tick_params(labelsize=9)
     
-    # Fechas formateadas estrictamente a Español
     f_init_es = fecha_a_espanol(f_inicio, con_ano=False)
     f_fin_es = fecha_a_espanol(f_fin, con_ano=True)
 
@@ -437,7 +437,6 @@ def ejecutar_procesamiento():
     width, height = len(grid_lon), len(grid_lat)
     transform = from_bounds(min_lon - 0.1, min_lat - 0.1, max_lon + 0.1, max_lat + 0.1, width, height)
 
-    # Hillshade perfectamente alineado
     hillshade_dem, extent_hs = generar_dem_hillshade(estaciones, grid_lon_mesh, grid_lat_mesh, gdf_boundary, transform, height, width)
 
     fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
@@ -535,7 +534,7 @@ def render_graficos_promedio():
     fig_rain.update_layout(barmode="group", xaxis_title="Fecha", yaxis_title="Precipitación (mm)", hovermode="x unified", height=380, margin=dict(l=20, r=20, t=30, b=20))
     st.plotly_chart(fig_rain, use_container_width=True)
 
-    # 2. Perfil Térmico (Azul #5593ff en T. Mínima)
+    # 2. Perfil Térmico
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### Modelo Europeo (ECMWF)")
@@ -564,7 +563,7 @@ def render_graficos_promedio():
     df_matriz_tmean = construir_matriz_estaciones(df_raw, "temperature_2m_mean", es_acumulado=False)
     df_matriz_tmin = construir_matriz_estaciones(df_raw, "temperature_2m_min", es_acumulado=False)
 
-    with st.expander("📋 Ver Matrices por Estaciones Convencionales", expanded=True):
+    with st.expander("📋 Ver Matrices por Estaciones (Formato Tabla)", expanded=True):
         st.markdown("##### 🌧️ Precipitación Diaria por Estación (mm)")
         st.dataframe(df_matriz_precip, use_container_width=True, height=220)
 
@@ -626,7 +625,7 @@ if 'excel_buffer' in st.session_state:
     )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API ")
+st.sidebar.caption("📌 **El Salvador Weather Visor**\nFuente: Open-Meteo API (GFS & ECMWF)")
 
 # =====================
 #  ÁREA PRINCIPAL
@@ -641,7 +640,7 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
     with tab1:
         col_rad, col_space = st.columns([1, 2])
         with col_rad:
-            semana = st.radio("Período de Análisis:", ["Semana 1 ", "Semana 2 "], horizontal=True)
+            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
         
         key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
         grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
@@ -656,16 +655,16 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
                 var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
             )
             st.pyplot(fig, use_container_width=True)
-            plt.close(fig)  # Liberación explícita de RAM
+            plt.close(fig)
             gc.collect()
 
     with tab2:
-        st.subheader("Pronóstico Diario")
+        st.subheader("Pronóstico Diario Continuo (16 Días)")
         fig_collage = generar_collage_16_dias(
             datos_var["raster_dict"], datos_var["hillshade"], datos_var["extent"], datos_var["gdf"], var_seleccionada
         )
         st.pyplot(fig_collage, use_container_width=True)
-        plt.close(fig_collage)  # Liberación explícita de RAM
+        plt.close(fig_collage)
         gc.collect()
 
 else:
