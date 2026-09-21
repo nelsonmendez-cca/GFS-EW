@@ -2,6 +2,7 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
+• Corrección de NameError en collage (cax_ax -> cbar_ax).
 • Rango de días personalizable para Semana 1 y Semana 2 (con valores por defecto intactos).
 • Ajuste de opacidad (raster alpha=0.75, hillshade alpha=0.50) para conservar la intensidad del negro (#000000).
 • Paleta de precipitación de 20 niveles saturados.
@@ -312,11 +313,9 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     estilo = ESTILOS_MAPA.get(var, {})
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
-    # Hillshade suavizado a alpha=0.50 para no blanquear el negro
     if hillshade is not None:
         ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.50, zorder=1)
 
-    # Opacidad del raster a 0.75 para dar nitidez e intensidad al negro
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.75, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
@@ -375,7 +374,7 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
         ext_val = estilo.get("extend", "neither")
         if estilo.get("ticks_diario"):
-            cbar = fig.colorbar(last_im, cax=cax_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val, spacing='uniform')
+            cbar = fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val, spacing='uniform')
             cbar.ax.tick_params(labelsize=8)
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
