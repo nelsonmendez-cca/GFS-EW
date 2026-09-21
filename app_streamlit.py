@@ -2,7 +2,8 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Nueva escala de colores RGB de precipitación de 13 niveles (0 a 500 mm).
+• Escalas diferenciadas de precipitación (Diaria: 0-100 mm | Semanal: 0-500 mm).
+• Opacidad optimizada (alpha=0.88) para evitar la apariencia pálida.
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
 • Corrección de alineación del Hillshade (sombras calzadas con la frontera).
 • Fechas 100% en español sin dependencia de locale.
@@ -93,7 +94,7 @@ ESTACIONES_JSON = {
 }
 
 # =====================
-#  NUEVA ESCALA RGB (13 NIVELES)
+#  PALETA RGB (13 NIVELES)
 # =====================
 colores_precip_rgb = np.array([
     [234, 234, 255],  # #EAEAFF
@@ -113,12 +114,15 @@ colores_precip_rgb = np.array([
 
 CMAP_PRECIP = mcolors.ListedColormap(colores_precip_rgb)
 
-# Límites basados exactamente en los steps solicitados
-BOUNDS_PRECIP = [0, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+# 1. Escala diaria (0 a 100 mm)
+BOUNDS_PRECIP_DIARIO = [0, 2, 5, 10, 15, 20, 30, 40, 50, 60, 75, 90, 100]
 
-# Normas para diario y semanal respetando la paleta de 13 colores
-NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP, ncolors=len(colores_precip_rgb), extend='max')
-NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP, ncolors=len(colores_precip_rgb), extend='max')
+# 2. Escala semanal (0 a 500 mm)
+BOUNDS_PRECIP_SEMANAL = [0, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+
+# Normas diferenciadas
+NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colores_precip_rgb), extend='max')
+NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
 
 STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
 COLORES_TEMP = [
@@ -132,11 +136,14 @@ NORM_TEMP = mcolors.BoundaryNorm(STEPS_TEMP, ncolors=len(COLORES_TEMP), extend='
 
 ESTILOS_MAPA = {
     "precipitation_sum": {
-        "cmap": CMAP_PRECIP, "norm_diario": NORM_PRECIP_DIARIO, "norm_semanal": NORM_PRECIP_SEMANAL,
-        "label_diario": "Precipitación (mm)", "label_semanal": "Precipitación Acumulada (mm)",
+        "cmap": CMAP_PRECIP, 
+        "norm_diario": NORM_PRECIP_DIARIO, 
+        "norm_semanal": NORM_PRECIP_SEMANAL,
+        "label_diario": "Precipitación Diaria (mm)", 
+        "label_semanal": "Precipitación Acumulada Semanal (mm)",
         "title": "Precipitación Pronosticada", 
-        "ticks_diario": BOUNDS_PRECIP,
-        "ticks_semanal": BOUNDS_PRECIP, 
+        "ticks_diario": BOUNDS_PRECIP_DIARIO,
+        "ticks_semanal": BOUNDS_PRECIP_SEMANAL, 
         "extend": "max"
     },
     "temperature_2m_max": {
@@ -297,9 +304,10 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.5, zorder=1)
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.4, zorder=1)
 
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
+    # Opacidad aumentada a 0.88 para mayor solidez de color
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.88, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
@@ -338,9 +346,10 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         raster = raster_dict[fecha]
         
         if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.5, zorder=1)
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.4, zorder=1)
 
-        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.68, zorder=2)
+        # Opacidad aumentada a 0.88 para viveza en colores
+        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.88, zorder=2)
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         dt_fecha = datetime.datetime.strptime(str(fecha).split()[0], "%Y-%m-%d")
