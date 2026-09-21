@@ -2,15 +2,9 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Corrección de selección continua de fechas transmeses en st.date_input (Septiembre -> Octubre).
-• NameError corregido en collage.
-• Rango de días personalizable para Semana 1, Semana 2 y Selector Libre.
-• Ajuste de opacidad (raster alpha=0.75, hillshade alpha=0.50) para conservar la intensidad del negro (#000000).
-• Paleta de precipitación de 20 niveles saturados.
-• Leyenda homogeneizada (spacing='uniform') para evitar amontonamiento de números.
-• Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
-• Fechas 100% en español sin dependencia de locale.
-• Perfil térmico ajustado (#5593ff en T. Mínima) y tabla de T. Media por estación.
+• Selección libre personalizada: Permite rangos de varios días o UN SOLO DÍA individual.
+• Optimización avanzada con caché de Streamlit (@st.cache_data / @st.cache_resource) 
+  para evitar sobrecarga de memoria RAM y acelerar los cálculos.
 """
 
 import json, os, sys, time, io, zipfile, datetime, gc
@@ -124,11 +118,9 @@ HEX_PRECIP = [
 
 CMAP_PRECIP = mcolors.ListedColormap(HEX_PRECIP)
 
-# 1. Escala Semanal (0 a 500 mm)
 BOUNDS_PRECIP_SEMANAL = [0, 1, 3, 5, 8, 10, 20, 40, 60, 80, 100, 150, 200, 250, 300, 325, 350, 400, 450, 500]
 TICKS_PRECIP_SEMANAL = [0, 3, 8, 20, 60, 100, 200, 300, 400, 500]
 
-# 2. Escala Diaria (0 a 100 mm)
 BOUNDS_PRECIP_DIARIO = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 30.0, 40.0, 50.0, 60.0, 65.0, 70.0, 80.0, 90.0, 100.0]
 TICKS_PRECIP_DIARIO = [0, 0.5, 1.5, 4.0, 12.0, 20.0, 40.0, 60.0, 80.0, 100.0]
 
@@ -173,7 +165,7 @@ session = requests.Session()
 session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 
 # =====================
-#  FUNCIONES AUXILIARES
+#  FUNCIONES AUXILIARES CON CACHÉ
 # =====================
 def fecha_a_espanol(fecha_str: str, con_ano: bool = True) -> str:
     dt = datetime.datetime.strptime(str(fecha_str).split()[0], "%Y-%m-%d")
@@ -182,6 +174,7 @@ def fecha_a_espanol(fecha_str: str, con_ano: bool = True) -> str:
         return f"{dt.day} de {mes_nombre} de {dt.year}"
     return f"{dt.day} de {mes_nombre}"
 
+@st.cache_resource
 def cargar_estaciones_y_border(ruta_geojson: str, buffer_deg: float) -> tuple:
     if not os.path.exists(ruta_geojson):
         st.error(f"❌ No se encontró el archivo GeoJSON: {ruta_geojson}")
@@ -263,6 +256,7 @@ def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray,
     
     return hillshade_crop, extent_hs
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_openmeteo_batch(lats: List[float], lons: List[float], modelo: str) -> List[Dict[str, Any]]:
     params = {
         "latitude": ",".join(map(str, lats)), "longitude": ",".join(map(str, lons)),
@@ -291,6 +285,7 @@ def parse_batch_response(results: List[Dict[str, Any]], batch_meta: List[Dict[st
         dfs.append(df)
     return dfs
 
+@st.cache_data(show_spinner=False)
 def interpolar_suave(points: np.ndarray, values: np.ndarray, grid_lon_mesh: np.ndarray, grid_lat_mesh: np.ndarray, es_precip: bool = False) -> np.ndarray:
     try:
         interp_ct = CloughTocher2DInterpolator(points, values)
@@ -312,7 +307,13 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     ax.set_facecolor('#d9ebf9')
 
     estilo = ESTILOS_MAPA.get(var, {})
-    cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
+    
+    # Si es un solo día, usar la norma y la etiqueta diaria para consistencia
+    es_un_solo_dia = (f_inicio == f_fin)
+    cmap = estilo["cmap"]
+    norm = estilo.get("norm_diario") if es_un_solo_dia else estilo.get("norm_semanal")
+    ticks = estilo.get("ticks_diario") if es_un_solo_dia else estilo.get("ticks_semanal")
+    label_cbar = estilo.get("label_diario", var) if es_un_solo_dia else estilo.get("label_semanal", var)
 
     if hillshade is not None:
         ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.50, zorder=1)
@@ -320,20 +321,24 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.75, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
-    label_cbar = estilo.get("label_semanal", var)
     ext_val = estilo.get("extend", "neither")
 
-    if estilo.get("ticks_semanal"):
-        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend=ext_val, spacing='uniform')
+    if ticks:
+        cbar = plt.colorbar(im, ax=ax, ticks=ticks, label=label_cbar, shrink=0.75, extend=ext_val, spacing='uniform')
     else:
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
     cbar.ax.tick_params(labelsize=8)
     
-    f_init_es = fecha_a_espanol(f_inicio, con_ano=False)
-    f_fin_es = fecha_a_espanol(f_fin, con_ano=True)
+    f_init_es = fecha_a_espanol(f_inicio, con_ano=True if es_un_solo_dia else False)
+    
+    if es_un_solo_dia:
+        texto_fecha = f"Día: {f_init_es}"
+    else:
+        f_fin_es = fecha_a_espanol(f_fin, con_ano=True)
+        texto_fecha = f"del {f_init_es} al {f_fin_es}"
 
-    plt.title(f"{estilo['title']}\n{titulo_semana}: del {f_init_es} al {f_fin_es}", fontsize=11, fontweight='bold', pad=10)
+    plt.title(f"{estilo['title']}\n{titulo_semana}: {texto_fecha}", fontsize=11, fontweight='bold', pad=10)
     plt.xlabel("Longitud", fontsize=9)
     plt.ylabel("Latitud", fontsize=9)
     plt.grid(True, linestyle=':', alpha=0.2)
@@ -508,7 +513,7 @@ def ejecutar_procesamiento():
     st.sidebar.success("🎉 Datos cargados exitosamente.")
 
 def calcular_raster_resumen(var: str, fechas_seleccionadas: List[str]) -> np.ndarray:
-    """ Genera el raster interpolado para cualquier rango de fechas personalizado. """
+    """ Genera el raster interpolado para cualquier rango de fechas o UN SOLO DÍA. """
     if not fechas_seleccionadas or 'df_ensamble' not in st.session_state:
         return None
 
@@ -524,7 +529,11 @@ def calcular_raster_resumen(var: str, fechas_seleccionadas: List[str]) -> np.nda
     if df_sub.empty:
         return None
 
-    df_agg = df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].sum().reset_index() if var == "precipitation_sum" else df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].mean().reset_index()
+    # Si es un solo día, tomamos el valor tal cual; si son varios días, acumulamos precipitación o promediamos temperatura
+    if len(fechas_seleccionadas) == 1:
+        df_agg = df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].mean().reset_index()
+    else:
+        df_agg = df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].sum().reset_index() if var == "precipitation_sum" else df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].mean().reset_index()
 
     points_sem, values_sem = df_agg[['lon', 'lat']].values, df_agg[var].values
     grid_z_sem = interpolar_suave(points_sem, values_sem, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
@@ -700,27 +709,35 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
             titulo_rango = "Semana 2"
         else:
             with col_custom:
-                st.markdown("##### 📅 Selector Personalizado de Fechas")
+                st.markdown("##### 📅 Selector Personalizado (Día Individual o Rango)")
                 if fechas_disp:
                     dt_disp = [datetime.datetime.strptime(f, "%Y-%m-%d").date() for f in fechas_disp]
+                    
                     rango_sel = st.date_input(
-                        "Seleccione el rango de días a acumular:",
+                        "Seleccione un solo día o un rango de fechas:",
                         value=(dt_disp[0], dt_disp[min(6, len(dt_disp)-1)]),
                         min_value=dt_disp[0],
                         max_value=dt_disp[-1],
                         key="selector_fechas_rango"
                     )
                     
-                    # Manejo robusto de la tupla durante la selección activa entre meses
+                    # Soporte para Selección de 1 solo día o Rango completo
                     if isinstance(rango_sel, tuple) or isinstance(rango_sel, list):
                         if len(rango_sel) == 2:
                             f_start_s, f_end_s = rango_sel[0].strftime("%Y-%m-%d"), rango_sel[1].strftime("%Y-%m-%d")
                             fechas_filtradas = [f for f in fechas_disp if f_start_s <= f <= f_end_s]
-                            titulo_rango = "Período Personalizado"
+                            titulo_rango = "Día Seleccionado" if f_start_s == f_end_s else "Período Personalizado"
                         elif len(rango_sel) == 1:
-                            st.info("👆 Por favor seleccione la segunda fecha (fin de rango) en el calendario.")
-                    else:
-                        st.info("👆 Seleccione el rango completo en el calendario.")
+                            # Caso interactivo: Se hizo clic en la primera fecha
+                            f_single = rango_sel[0].strftime("%Y-%m-%d")
+                            fechas_filtradas = [f_single]
+                            titulo_rango = "Día Seleccionado"
+                            st.caption("ℹ️ *Puede volver a hacer clic en otra fecha para extender el rango.*")
+                    elif isinstance(rango_sel, datetime.date):
+                        # En caso de que date_input devuelva un único valor de fecha
+                        f_single = rango_sel.strftime("%Y-%m-%d")
+                        fechas_filtradas = [f_single]
+                        titulo_rango = "Día Seleccionado"
 
         if fechas_filtradas:
             raster_resumen = calcular_raster_resumen(var_seleccionada, fechas_filtradas)
