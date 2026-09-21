@@ -2,7 +2,7 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Nueva escala de colores RGB de precipitación aplicada.
+• Nueva escala de colores RGB de precipitación de 13 niveles (0 a 500 mm).
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
 • Corrección de alineación del Hillshade (sombras calzadas con la frontera).
 • Fechas 100% en español sin dependencia de locale.
@@ -93,28 +93,32 @@ ESTACIONES_JSON = {
 }
 
 # =====================
-#  NUEVA ESCALA RGB
+#  NUEVA ESCALA RGB (13 NIVELES)
 # =====================
 colores_precip_rgb = np.array([
-    [255, 255, 255],  # #FFFFFF
-    [218, 241, 255],  # #DAF1FF
-    [181, 224, 255],  # #B5E0FF
-    [134, 212, 255],  # #86D4FF
-    [83,  171, 255],  # #53ABFF
-    [41,  117, 255],  # #2975FF
-    [18,  39,  255],  # #1227FF
-    [156, 74,  255],  # #9C4AFF
-    [184, 4,   255],  # #B804FF
-    [235, 3,   255],  # #EB03FF
-    [176, 0,   184],  # #B000B8
+    [234, 234, 255],  # #EAEAFF
+    [204, 204, 255],  # #CCCCFF
+    [192, 192, 255],  # #C0C0FF
+    [179, 179, 255],  # #B3B3FF
+    [102, 102, 255],  # #6666FF
+    [ 77,  77, 255],  # #4D4DFF
+    [ 51,  51, 255],  # #3333FF
+    [ 20,  32, 230],  # #1420E6
+    [ 17,  35, 217],  # #1123D9
+    [  9,  43, 134],  # #092B86
+    [  5,  47,  93],  # #052F5D
+    [  3,  24,  47],  # #03182F
+    [  0,   0,   0],  # #000000
 ]) / 255.0
 
 CMAP_PRECIP = mcolors.ListedColormap(colores_precip_rgb)
-BOUNDS_PRECIP_DIARIO = [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50]
-NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(colores_precip_rgb), extend='max')
 
-BOUNDS_PRECIP_SEMANAL = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250]
-NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(colores_precip_rgb), extend='max')
+# Límites basados exactamente en los steps solicitados
+BOUNDS_PRECIP = [0, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+
+# Normas para diario y semanal respetando la paleta de 13 colores
+NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP, ncolors=len(colores_precip_rgb), extend='max')
+NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP, ncolors=len(colores_precip_rgb), extend='max')
 
 STEPS_TEMP = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
 COLORES_TEMP = [
@@ -130,8 +134,10 @@ ESTILOS_MAPA = {
     "precipitation_sum": {
         "cmap": CMAP_PRECIP, "norm_diario": NORM_PRECIP_DIARIO, "norm_semanal": NORM_PRECIP_SEMANAL,
         "label_diario": "Precipitación (mm)", "label_semanal": "Precipitación Acumulada (mm)",
-        "title": "Precipitación Pronosticada", "ticks_diario": [0, 1, 2.5, 5, 10, 15, 20, 25, 30, 40, 50],
-        "ticks_semanal": [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 250], "extend": "max"
+        "title": "Precipitación Pronosticada", 
+        "ticks_diario": BOUNDS_PRECIP,
+        "ticks_semanal": BOUNDS_PRECIP, 
+        "extend": "max"
     },
     "temperature_2m_max": {
         "cmap": CMAP_TEMP, "norm_diario": NORM_TEMP, "norm_semanal": NORM_TEMP,
@@ -152,7 +158,6 @@ session.headers.update({"User-Agent": "Sire-Downloader/Streamlit"})
 #  FUNCIONES AUXILIARES
 # =====================
 def fecha_a_espanol(fecha_str: str, con_ano: bool = True) -> str:
-    """ Convierte YYYY-MM-DD a formato español exacto """
     dt = datetime.datetime.strptime(str(fecha_str).split()[0], "%Y-%m-%d")
     mes_nombre = MESES_ES[dt.month]
     if con_ano:
@@ -305,7 +310,7 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     else:
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
-    cbar.ax.tick_params(labelsize=9)
+    cbar.ax.tick_params(labelsize=8)
     
     f_init_es = fecha_a_espanol(f_inicio, con_ano=False)
     f_fin_es = fecha_a_espanol(f_fin, con_ano=True)
@@ -352,7 +357,8 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
         ext_val = estilo.get("extend", "neither")
         if estilo.get("ticks_diario"):
-            fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val)
+            cbar = fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val)
+            cbar.ax.tick_params(labelsize=8)
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
 
