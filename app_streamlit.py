@@ -2,11 +2,10 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Tonalidades HEX más intensas y saturadas para evitar la apariencia pálida.
-• Opacidad de la capa de color ajustada a alpha=0.65.
-• Opacidad del fondo de relieve (Hillshade) reducida a alpha=0.65.
-• Leyenda de color homogeneizada (spacing='uniform') para evitar amontonamiento de etiquetas.
-• Escala Semanal (0 a >500 mm) y Diaria (0 a >100 mm) alineadas.
+• Rango de días personalizable para Semana 1 y Semana 2 (con valores por defecto intactos).
+• Ajuste de opacidad (raster alpha=0.75, hillshade alpha=0.50) para conservar la intensidad del negro (#000000).
+• Paleta de precipitación de 20 niveles saturados.
+• Leyenda homogeneizada (spacing='uniform') para evitar amontonamiento de números.
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
 • Fechas 100% en español sin dependencia de locale.
 • Perfil térmico ajustado (#5593ff en T. Mínima) y tabla de T. Media por estación.
@@ -109,7 +108,7 @@ HEX_PRECIP = [
     "#59BD58",  # 8
     "#3A9637",  # 9
     "#2E7D2A",  # 10
-    "#7EE2F7",  # 11 - Cían más saturado
+    "#7EE2F7",  # 11 - Cían saturado
     "#4DB3EE",  # 12
     "#2B93E2",  # 13
     "#1578CF",  # 14
@@ -118,7 +117,7 @@ HEX_PRECIP = [
     "#052C6E",  # 17
     "#031842",  # 18
     "#020F2B",  # 19
-    "#000000"   # 20 - Negro
+    "#000000"   # 20 - Negro Puro
 ]
 
 CMAP_PRECIP = mcolors.ListedColormap(HEX_PRECIP)
@@ -150,7 +149,7 @@ ESTILOS_MAPA = {
         "norm_diario": NORM_PRECIP_DIARIO, 
         "norm_semanal": NORM_PRECIP_SEMANAL,
         "label_diario": "Precipitación Diaria (mm)", 
-        "label_semanal": "Precipitación Acumulada Semanal (mm)",
+        "label_semanal": "Precipitación Acumulada (mm)",
         "title": "Precipitación Pronosticada", 
         "ticks_diario": TICKS_PRECIP_DIARIO,
         "ticks_semanal": TICKS_PRECIP_SEMANAL, 
@@ -313,10 +312,12 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     estilo = ESTILOS_MAPA.get(var, {})
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
+    # Hillshade suavizado a alpha=0.50 para no blanquear el negro
     if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.65, zorder=1)
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.50, zorder=1)
 
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.65, zorder=2)
+    # Opacidad del raster a 0.75 para dar nitidez e intensidad al negro
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.75, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
@@ -355,9 +356,9 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         raster = raster_dict[fecha]
         
         if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.65, zorder=1)
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.50, zorder=1)
 
-        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.65, zorder=2)
+        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.75, zorder=2)
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         dt_fecha = datetime.datetime.strptime(str(fecha).split()[0], "%Y-%m-%d")
@@ -374,7 +375,7 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
         ext_val = estilo.get("extend", "neither")
         if estilo.get("ticks_diario"):
-            cbar = fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val, spacing='uniform')
+            cbar = fig.colorbar(last_im, cax=cax_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val, spacing='uniform')
             cbar.ax.tick_params(labelsize=8)
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
@@ -464,13 +465,14 @@ def ejecutar_procesamiento():
 
     fechas_disponibles = sorted(df_ensamble['date'].unique())[:16]
 
-    d_manana = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-    d_s1_end = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
-    d_s2_start = (date.today() + timedelta(days=8)).strftime("%Y-%m-%d")
-    d_s2_end = (date.today() + timedelta(days=14)).strftime("%Y-%m-%d")
-
-    fechas_s1 = [f for f in fechas_disponibles if d_manana <= f <= d_s1_end]
-    fechas_s2 = [f for f in fechas_disponibles if d_s2_start <= f <= d_s2_end]
+    st.session_state['df_ensamble'] = df_ensamble
+    st.session_state['grid_lon_mesh'] = grid_lon_mesh
+    st.session_state['grid_lat_mesh'] = grid_lat_mesh
+    st.session_state['transform'] = transform
+    st.session_state['height'] = height
+    st.session_state['width'] = width
+    st.session_state['geometrias'] = geometrias
+    st.session_state['fechas_disponibles'] = fechas_disponibles
 
     st.session_state['datos_procesados'] = {}
 
@@ -481,7 +483,6 @@ def ejecutar_procesamiento():
 
         for fecha in fechas_disponibles:
             df_fecha = df_ensamble[df_ensamble['date'] == fecha]
-            
             if df_fecha[var].dropna().empty:
                 fechas_prev = [f for f in fechas_disponibles if f < fecha]
                 if fechas_prev:
@@ -496,32 +497,43 @@ def ejecutar_procesamiento():
             )
             raster_diario_dict[fecha] = raster_dia
 
-        raster_semanal_dict = {}
-        for nom_sem, grp_fechas in [("SEMANA_1", fechas_s1), ("SEMANA_2", fechas_s2)]:
-            if grp_fechas:
-                df_sub_sem = df_ensamble[df_ensamble['date'].isin(grp_fechas)]
-                df_sem_agg = df_sub_sem.groupby(["ID", "NAME", "lat", "lon"])[var].sum().reset_index() if var == "precipitation_sum" else df_sub_sem.groupby(["ID", "NAME", "lat", "lon"])[var].mean().reset_index()
-
-                points_sem, values_sem = df_sem_agg[['lon', 'lat']].values, df_sem_agg[var].values
-                grid_z_sem = interpolar_suave(points_sem, values_sem, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
-                
-                raster_sem, _, _ = recortar_y_guardar_raster(
-                    grid_z_sem, f"pronostico_ENSAMBLE_{var}_{nom_sem}", transform, height, width, geometrias
-                )
-                raster_semanal_dict[nom_sem] = raster_sem
-
         st.session_state['datos_procesados'][var] = {
             "raster_dict": raster_diario_dict,
-            "raster_semanal": raster_semanal_dict,
             "hillshade": hillshade_dem,
             "extent": extent_hs,
-            "fechas_s1": fechas_s1,
-            "fechas_s2": fechas_s2,
             "gdf": gdf_boundary
         }
 
     progreso.progress(100, text="¡Completado!")
     st.sidebar.success("🎉 Datos cargados exitosamente.")
+
+def calcular_raster_resumen(var: str, fechas_seleccionadas: List[str]) -> np.ndarray:
+    """ Genera el raster interpolado para cualquier rango de fechas personalizado. """
+    if not fechas_seleccionadas or 'df_ensamble' not in st.session_state:
+        return None
+
+    df_ensamble = st.session_state['df_ensamble']
+    grid_lon_mesh = st.session_state['grid_lon_mesh']
+    grid_lat_mesh = st.session_state['grid_lat_mesh']
+    transform = st.session_state['transform']
+    height = st.session_state['height']
+    width = st.session_state['width']
+    geometrias = st.session_state['geometrias']
+
+    df_sub = df_ensamble[df_ensamble['date'].isin(fechas_seleccionadas)]
+    if df_sub.empty:
+        return None
+
+    df_agg = df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].sum().reset_index() if var == "precipitation_sum" else df_sub.groupby(["ID", "NAME", "lat", "lon"])[var].mean().reset_index()
+
+    points_sem, values_sem = df_agg[['lon', 'lat']].values, df_agg[var].values
+    grid_z_sem = interpolar_suave(points_sem, values_sem, grid_lon_mesh, grid_lat_mesh, es_precip=(var == "precipitation_sum"))
+
+    tag_fechas = f"{fechas_seleccionadas[0]}_a_{fechas_seleccionadas[-1]}"
+    raster_sem, _, _ = recortar_y_guardar_raster(
+        grid_z_sem, f"pronostico_ENSAMBLE_{var}_CUSTOM_{tag_fechas}", transform, height, width, geometrias
+    )
+    return raster_sem
 
 def render_graficos_promedio():
     st.subheader("📊 Promedio Nacional y Datos por Estación")
@@ -659,27 +671,61 @@ tab1, tab2, tab3 = st.tabs(["📅 Resumen Semanal", "🗓️ Collage 16 Días", 
 
 if 'datos_procesados' in st.session_state and var_seleccionada:
     datos_var = st.session_state['datos_procesados'][var_seleccionada]
+    fechas_disp = st.session_state.get('fechas_disponibles', [])
 
     with tab1:
-        col_rad, col_space = st.columns([1, 2])
-        with col_rad:
-            semana = st.radio("Período de Análisis:", ["Semana 1 (Días 1-7)", "Semana 2 (Días 8-14)"], horizontal=True)
+        st.subheader("Análisis por Rango de Días")
+        col_rad, col_custom = st.columns([1, 2])
         
-        key_sem = "SEMANA_1" if "Semana 1" in semana else "SEMANA_2"
-        grupo_fechas = datos_var["fechas_s1"] if "Semana 1" in semana else datos_var["fechas_s2"]
+        with col_rad:
+            semana = st.radio("Período de Análisis:", ["Semana 1 (Predeterminada)", "Semana 2 (Predeterminada)", "Personalizar Rango"], horizontal=False)
 
-        if grupo_fechas and key_sem in datos_var.get("raster_semanal", {}):
-            raster_resumen = datos_var["raster_semanal"][key_sem]
-            f_init_str = grupo_fechas[0]
-            f_end_str  = grupo_fechas[-1]
+        # Cómputo de rangos por defecto
+        d_manana = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        d_s1_end = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
+        d_s2_start = (date.today() + timedelta(days=8)).strftime("%Y-%m-%d")
+        d_s2_end = (date.today() + timedelta(days=14)).strftime("%Y-%m-%d")
 
-            fig = generar_figura_semanal(
-                raster_resumen, datos_var["hillshade"], datos_var["extent"], datos_var["gdf"],
-                var_seleccionada, f"{semana.split(' ')[0]} {semana.split(' ')[1]}", f_init_str, f_end_str
-            )
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
-            gc.collect()
+        def_s1 = [f for f in fechas_disp if d_manana <= f <= d_s1_end]
+        def_s2 = [f for f in fechas_disp if d_s2_start <= f <= d_s2_end]
+
+        fechas_filtradas = []
+        titulo_rango = ""
+
+        if semana == "Semana 1 (Predeterminada)":
+            fechas_filtradas = def_s1
+            titulo_rango = "Semana 1"
+        elif semana == "Semana 2 (Predeterminada)":
+            fechas_filtradas = def_s2
+            titulo_rango = "Semana 2"
+        else:
+            with col_custom:
+                st.markdown("##### 📅 Selector Personalizado de Fechas")
+                if fechas_disp:
+                    dt_disp = [datetime.datetime.strptime(f, "%Y-%m-%d").date() for f in fechas_disp]
+                    rango_sel = st.date_input(
+                        "Seleccione el rango de días a acumular:",
+                        value=(dt_disp[0], dt_disp[min(6, len(dt_disp)-1)]),
+                        min_value=dt_disp[0],
+                        max_value=dt_disp[-1]
+                    )
+                    if isinstance(rango_sel, tuple) and len(rango_sel) == 2:
+                        f_start_s, f_end_s = rango_sel[0].strftime("%Y-%m-%d"), rango_sel[1].strftime("%Y-%m-%d")
+                        fechas_filtradas = [f for f in fechas_disp if f_start_s <= f <= f_end_s]
+                        titulo_rango = "Período Personalizado"
+                    else:
+                        st.warning("Seleccione ambas fechas (Inicio y Fin).")
+
+        if fechas_filtradas:
+            raster_resumen = calcular_raster_resumen(var_seleccionada, fechas_filtradas)
+            if raster_resumen is not None:
+                fig = generar_figura_semanal(
+                    raster_resumen, datos_var["hillshade"], datos_var["extent"], datos_var["gdf"],
+                    var_seleccionada, titulo_rango, fechas_filtradas[0], fechas_filtradas[-1]
+                )
+                st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+                gc.collect()
 
     with tab2:
         st.subheader("Pronóstico Diario Continuo (16 Días)")
