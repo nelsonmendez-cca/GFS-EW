@@ -2,10 +2,12 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Nueva paleta de precipitación de 20 niveles (HEX personalizados).
-• Escala Semanal (0 a >500 mm) y Diaria (0 a >100 mm) alineadas proporcionalmente.
+• Leyenda de color homogeneizada (spacing='uniform') para evitar amontonamiento de etiquetas.
+• Relieve topográfico (Hillshade) potenciado (vert_exag=6.0, contraste realzado).
+• Opacidad balanceada (alpha=0.60) para permitir la visión clara de cordilleras y valles.
+• Paleta de precipitación de 20 niveles mantenida.
+• Escala Semanal (0 a >500 mm) y Diaria (0 a >100 mm) alineadas.
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
-• Corrección de alineación del Hillshade (sombras calzadas con la frontera).
 • Fechas 100% en español sin dependencia de locale.
 • Perfil térmico ajustado (#5593ff en T. Mínima) y tabla de T. Media por estación.
 """
@@ -94,7 +96,7 @@ ESTACIONES_JSON = {
 }
 
 # =====================
-#  NUEVA PALETA DE PRECIPITACIÓN (20 NIVELES)
+#  PALETA DE PRECIPITACIÓN (20 NIVELES)
 # =====================
 HEX_PRECIP = [
     "#FFFFFF",  # 1
@@ -123,9 +125,11 @@ CMAP_PRECIP = mcolors.ListedColormap(HEX_PRECIP)
 
 # 1. Escala Semanal (0 a 500 mm)
 BOUNDS_PRECIP_SEMANAL = [0, 1, 3, 5, 8, 10, 20, 40, 60, 80, 100, 150, 200, 250, 300, 325, 350, 400, 450, 500]
+TICKS_PRECIP_SEMANAL = [0, 3, 8, 20, 60, 100, 200, 300, 400, 500]
 
 # 2. Escala Diaria (0 a 100 mm)
 BOUNDS_PRECIP_DIARIO = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 30.0, 40.0, 50.0, 60.0, 65.0, 70.0, 80.0, 90.0, 100.0]
+TICKS_PRECIP_DIARIO = [0, 0.5, 1.5, 4.0, 12.0, 20.0, 40.0, 60.0, 80.0, 100.0]
 
 NORM_PRECIP_DIARIO = mcolors.BoundaryNorm(BOUNDS_PRECIP_DIARIO, ncolors=len(HEX_PRECIP), extend='max')
 NORM_PRECIP_SEMANAL = mcolors.BoundaryNorm(BOUNDS_PRECIP_SEMANAL, ncolors=len(HEX_PRECIP), extend='max')
@@ -148,8 +152,8 @@ ESTILOS_MAPA = {
         "label_diario": "Precipitación Diaria (mm)", 
         "label_semanal": "Precipitación Acumulada Semanal (mm)",
         "title": "Precipitación Pronosticada", 
-        "ticks_diario": [0, 1, 2, 5, 10, 20, 40, 60, 80, 100],
-        "ticks_semanal": [0, 10, 20, 40, 80, 150, 250, 350, 500], 
+        "ticks_diario": TICKS_PRECIP_DIARIO,
+        "ticks_semanal": TICKS_PRECIP_SEMANAL, 
         "extend": "max"
     },
     "temperature_2m_max": {
@@ -245,10 +249,10 @@ def generar_dem_hillshade(estaciones: Dict[str, Any], grid_lon_mesh: np.ndarray,
     elevations = np.array([meta["elevation"] for meta in estaciones.values()])
 
     dem_grid = griddata(points, elevations, (grid_lon_mesh, grid_lat_mesh), method='cubic')
-    dem_grid = gaussian_filter(np.nan_to_num(dem_grid, nan=0.0), sigma=2.0)
+    dem_grid = gaussian_filter(np.nan_to_num(dem_grid, nan=0.0), sigma=1.0)
 
     ls = LightSource(azdeg=315, altdeg=45)
-    hillshade_raw = ls.hillshade(dem_grid, vert_exag=3.0)
+    hillshade_raw = ls.hillshade(dem_grid, vert_exag=6.0)
 
     geometrias = [geom for geom in gdf_boundary.geometry]
     
@@ -310,16 +314,17 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.4, zorder=1)
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.7, zorder=1)
 
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.88, zorder=2)
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.60, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
     ext_val = estilo.get("extend", "neither")
 
+    # Modificado: spacing='uniform' para distanciar homogéneamente todas las etiquetas
     if estilo.get("ticks_semanal"):
-        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend=ext_val)
+        cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend=ext_val, spacing='uniform')
     else:
         cbar = plt.colorbar(im, ax=ax, label=label_cbar, shrink=0.75)
 
@@ -351,9 +356,9 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         raster = raster_dict[fecha]
         
         if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.4, zorder=1)
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.7, zorder=1)
 
-        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.88, zorder=2)
+        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.60, zorder=2)
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         dt_fecha = datetime.datetime.strptime(str(fecha).split()[0], "%Y-%m-%d")
@@ -370,7 +375,7 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         cbar_ax = fig.add_axes([0.15, 0.04, 0.7, 0.02])
         ext_val = estilo.get("extend", "neither")
         if estilo.get("ticks_diario"):
-            cbar = fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val)
+            cbar = fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', ticks=estilo["ticks_diario"], label=estilo.get("label_diario", var), extend=ext_val, spacing='uniform')
             cbar.ax.tick_params(labelsize=8)
         else:
             fig.colorbar(last_im, cax=cbar_ax, orientation='horizontal', label=estilo.get("label_diario", var))
