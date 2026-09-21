@@ -2,10 +2,10 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
+• Tonalidades HEX más intensas y saturadas para evitar la apariencia pálida.
+• Opacidad de la capa de color ajustada a alpha=0.65.
+• Opacidad del fondo de relieve (Hillshade) reducida a alpha=0.65.
 • Leyenda de color homogeneizada (spacing='uniform') para evitar amontonamiento de etiquetas.
-• Relieve topográfico (Hillshade) potenciado (vert_exag=6.0, contraste realzado).
-• Opacidad balanceada (alpha=0.60) para permitir la visión clara de cordilleras y valles.
-• Paleta de precipitación de 20 niveles mantenida.
 • Escala Semanal (0 a >500 mm) y Diaria (0 a >100 mm) alineadas.
 • Máxima resolución espacial sin fugas de memoria (plt.close + gc.collect).
 • Fechas 100% en español sin dependencia de locale.
@@ -96,29 +96,29 @@ ESTACIONES_JSON = {
 }
 
 # =====================
-#  PALETA DE PRECIPITACIÓN (20 NIVELES)
+#  PALETA DE PRECIPITACIÓN (20 NIVELES SATURADOS)
 # =====================
 HEX_PRECIP = [
-    "#FFFFFF",  # 1
-    "#FFF9B8",  # 2
-    "#E8ED9B",  # 3
-    "#D3E07A",  # 4
-    "#C4D35A",  # 5
-    "#B3EFA8",  # 6
-    "#A1E0A4",  # 7
-    "#81C780",  # 8
-    "#5FA65C",  # 9
-    "#4A8F45",  # 10
-    "#A5E6F5",  # 11
-    "#7CC4F2",  # 12
-    "#5AA7E8",  # 13
-    "#2F8FD9",  # 14
-    "#1F6FC0",  # 15
-    "#0E4D9B",  # 16
-    "#0B3A7A",  # 17
-    "#071F4F",  # 18
-    "#03182F",  # 19
-    "#000000"   # 20
+    "#FFFFFF",  # 1 - Blanco
+    "#FFF585",  # 2 - Amarillo vivo
+    "#DEEA6F",  # 3
+    "#C8DD48",  # 4
+    "#B6CD2B",  # 5
+    "#9DE68C",  # 6
+    "#82D886",  # 7
+    "#59BD58",  # 8
+    "#3A9637",  # 9
+    "#2E7D2A",  # 10
+    "#7EE2F7",  # 11 - Cían más saturado
+    "#4DB3EE",  # 12
+    "#2B93E2",  # 13
+    "#1578CF",  # 14
+    "#0B5CB5",  # 15
+    "#073E8F",  # 16
+    "#052C6E",  # 17
+    "#031842",  # 18
+    "#020F2B",  # 19
+    "#000000"   # 20 - Negro
 ]
 
 CMAP_PRECIP = mcolors.ListedColormap(HEX_PRECIP)
@@ -314,15 +314,14 @@ def generar_figura_semanal(raster_resumen: np.ndarray, hillshade: np.ndarray, ex
     cmap, norm = estilo["cmap"], estilo.get("norm_semanal")
 
     if hillshade is not None:
-        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.7, zorder=1)
+        ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.65, zorder=1)
 
-    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.60, zorder=2)
+    im = ax.imshow(raster_resumen, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.65, zorder=2)
     gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.8, zorder=3)
 
     label_cbar = estilo.get("label_semanal", var)
     ext_val = estilo.get("extend", "neither")
 
-    # Modificado: spacing='uniform' para distanciar homogéneamente todas las etiquetas
     if estilo.get("ticks_semanal"):
         cbar = plt.colorbar(im, ax=ax, ticks=estilo["ticks_semanal"], label=label_cbar, shrink=0.75, extend=ext_val, spacing='uniform')
     else:
@@ -356,9 +355,9 @@ def generar_collage_16_dias(raster_dict: Dict[str, np.ndarray], hillshade: np.nd
         raster = raster_dict[fecha]
         
         if hillshade is not None:
-            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.7, zorder=1)
+            ax.imshow(hillshade, extent=extent, cmap='gray', origin='upper', alpha=0.65, zorder=1)
 
-        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.60, zorder=2)
+        last_im = ax.imshow(raster, extent=extent, cmap=cmap, norm=norm, origin='upper', alpha=0.65, zorder=2)
         gdf_boundary.plot(ax=ax, facecolor='none', edgecolor='#111111', linewidth=0.45, zorder=3)
 
         dt_fecha = datetime.datetime.strptime(str(fecha).split()[0], "%Y-%m-%d")
