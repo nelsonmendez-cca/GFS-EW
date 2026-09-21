@@ -2,8 +2,9 @@
 """
 Interfaz Interactiva con Streamlit - El Salvador
 ---------------------------------------------------------------------------------------
-• Corrección de NameError en collage (cax_ax -> cbar_ax).
-• Rango de días personalizable para Semana 1 y Semana 2 (con valores por defecto intactos).
+• Corrección de selección continua de fechas transmeses en st.date_input (Septiembre -> Octubre).
+• NameError corregido en collage.
+• Rango de días personalizable para Semana 1, Semana 2 y Selector Libre.
 • Ajuste de opacidad (raster alpha=0.75, hillshade alpha=0.50) para conservar la intensidad del negro (#000000).
 • Paleta de precipitación de 20 niveles saturados.
 • Leyenda homogeneizada (spacing='uniform') para evitar amontonamiento de números.
@@ -706,14 +707,20 @@ if 'datos_procesados' in st.session_state and var_seleccionada:
                         "Seleccione el rango de días a acumular:",
                         value=(dt_disp[0], dt_disp[min(6, len(dt_disp)-1)]),
                         min_value=dt_disp[0],
-                        max_value=dt_disp[-1]
+                        max_value=dt_disp[-1],
+                        key="selector_fechas_rango"
                     )
-                    if isinstance(rango_sel, tuple) and len(rango_sel) == 2:
-                        f_start_s, f_end_s = rango_sel[0].strftime("%Y-%m-%d"), rango_sel[1].strftime("%Y-%m-%d")
-                        fechas_filtradas = [f for f in fechas_disp if f_start_s <= f <= f_end_s]
-                        titulo_rango = "Período Personalizado"
+                    
+                    # Manejo robusto de la tupla durante la selección activa entre meses
+                    if isinstance(rango_sel, tuple) or isinstance(rango_sel, list):
+                        if len(rango_sel) == 2:
+                            f_start_s, f_end_s = rango_sel[0].strftime("%Y-%m-%d"), rango_sel[1].strftime("%Y-%m-%d")
+                            fechas_filtradas = [f for f in fechas_disp if f_start_s <= f <= f_end_s]
+                            titulo_rango = "Período Personalizado"
+                        elif len(rango_sel) == 1:
+                            st.info("👆 Por favor seleccione la segunda fecha (fin de rango) en el calendario.")
                     else:
-                        st.warning("Seleccione ambas fechas (Inicio y Fin).")
+                        st.info("👆 Seleccione el rango completo en el calendario.")
 
         if fechas_filtradas:
             raster_resumen = calcular_raster_resumen(var_seleccionada, fechas_filtradas)
